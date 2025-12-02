@@ -42,7 +42,8 @@ export class XmlMatcher<Result = XmlMatcherResult> {
 	}
 
 	private _update(chunk: string) {
-		for (const char of chunk) {
+		for (let i = 0; i < chunk.length; i++) {
+			const char = chunk[i]
 			this.cached.push(char)
 			this.pointer++
 

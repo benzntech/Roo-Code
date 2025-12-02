@@ -1,141 +1,112 @@
-<div align="center">
-<sub>
-
-<b>English</b> • [Català](locales/ca/CONTRIBUTING.md) • [Deutsch](locales/de/CONTRIBUTING.md) • [Español](locales/es/CONTRIBUTING.md) • [Français](locales/fr/CONTRIBUTING.md) • [हिंदी](locales/hi/CONTRIBUTING.md) • [Bahasa Indonesia](locales/id/CONTRIBUTING.md) • [Italiano](locales/it/CONTRIBUTING.md) • [日本語](locales/ja/CONTRIBUTING.md)
-
-</sub>
-<sub>
-
-[한국어](locales/ko/CONTRIBUTING.md) • [Nederlands](locales/nl/CONTRIBUTING.md) • [Polski](locales/pl/CONTRIBUTING.md) • [Português (BR)](locales/pt-BR/CONTRIBUTING.md) • [Русский](locales/ru/CONTRIBUTING.md) • [Türkçe](locales/tr/CONTRIBUTING.md) • [Tiếng Việt](locales/vi/CONTRIBUTING.md) • [简体中文](locales/zh-CN/CONTRIBUTING.md) • [繁體中文](locales/zh-TW/CONTRIBUTING.md)
-
-</sub>
-</div>
-
 # Contributing to Roo Code
 
-Roo Code is a community-driven project, and we deeply value every contribution. To streamline collaboration, we operate on an [Issue-First](#issue-first-approach) basis, meaning all [Pull Requests (PRs)](#submitting-a-pull-request) must first be linked to a GitHub Issue. Please review this guide carefully.
+We're thrilled you're interested in contributing to Roo Code. Whether you're fixing a bug, adding a feature, or improving our docs, every contribution makes Roo Code smarter! To keep our community vibrant and welcoming, all members must adhere to our [Code of Conduct](CODE_OF_CONDUCT.md).
 
-## Table of Contents
+## Join Our Community
 
-- [Before You Contribute](#before-you-contribute)
-- [Finding & Planning Your Contribution](#finding--planning-your-contribution)
-- [Development & Submission Process](#development--submission-process)
-- [Legal](#legal)
+We strongly encourage all contributors to join our [Discord community](https://discord.gg/roocode)! Being part of our Discord server helps you:
 
-## Before You Contribute
+- Get real-time help and guidance on your contributions
+- Connect with other contributors and core team members
+- Stay updated on project developments and priorities
+- Participate in discussions that shape Roo Code's future
+- Find collaboration opportunities with other developers
 
-### 1. Code of Conduct
+## Reporting Bugs or Issues
 
-All contributors must adhere to our [Code of Conduct](./CODE_OF_CONDUCT.md).
+Bug reports help make Roo Code better for everyone! Before creating a new issue, please [search existing ones](https://github.com/RooVetGit/Roo-Code/issues) to avoid duplicates. When you're ready to report a bug, head over to our [issues page](https://github.com/RooVetGit/Roo-Code/issues/new/choose) where you'll find a template to help you with filling out the relevant information.
 
-### 2. Project Roadmap
+<blockquote class='warning-note'>
+     🔐 <b>Important:</b> If you discover a security vulnerability, please use the <a href="https://github.com/RooVetGit/Roo-Code/security/advisories/new">Github security tool to report it privately</a>.
+</blockquote>
 
-Our roadmap guides the project's direction. Align your contributions with these key goals:
+## Deciding What to Work On
 
-### Reliability First
+Looking for a good first contribution? Check out issues in the "Issue [Unassigned]" section of our [Roo Code Issues](https://github.com/orgs/RooVetGit/projects/1) Github Project. These are specifically curated for new contributors and areas where we'd love some help!
 
-- Ensure diff editing and command execution are consistently reliable.
-- Reduce friction points that deter regular usage.
-- Guarantee smooth operation across all locales and platforms.
-- Expand robust support for a wide variety of AI providers and models.
+We also welcome contributions to our [documentation](https://docs.roocode.com/)! Whether it's fixing typos, improving existing guides, or creating new educational content - we'd love to build a community-driven repository of resources that helps everyone get the most out of Roo Code. You can click "Edit this page" on any page to quickly get to the right spot in Github to edit the file, or you can dive directly into https://github.com/RooVetGit/Roo-Code-Docs.
 
-### Enhanced User Experience
+If you're planning to work on a bigger feature, please create a [feature request](https://github.com/RooVetGit/Roo-Code/discussions/categories/feature-requests?discussions_q=is%3Aopen+category%3A%22Feature+Requests%22+sort%3Atop) first so we can discuss whether it aligns with Roo Code's vision.
 
-- Streamline the UI/UX for clarity and intuitiveness.
-- Continuously improve the workflow to meet the high expectations developers have for daily-use tools.
+## Development Setup
 
-### Leading on Agent Performance
+1. **Clone** the repo:
 
-- Establish comprehensive evaluation benchmarks (evals) to measure real-world productivity.
-- Make it easy for everyone to easily run and interpret these evals.
-- Ship improvements that demonstrate clear increases in eval scores.
-
-Mention alignment with these areas in your PRs.
-
-### 3. Join the Roo Code Community
-
-- **Primary:** Join our [Discord](https://discord.gg/roocode) and DM **Hannes Rudolph (`hrudolph`)**.
-- **Alternative:** Experienced contributors can engage directly via [GitHub Projects](https://github.com/orgs/RooCodeInc/projects/1).
-
-## Finding & Planning Your Contribution
-
-### Types of Contributions
-
-- **Bug Fixes:** Addressing code issues.
-- **New Features:** Adding functionality.
-- **Documentation:** Improving guides and clarity.
-
-### Issue-First Approach
-
-All contributions start with a GitHub Issue using our skinny templates.
-
-- **Check existing issues**: Search [GitHub Issues](https://github.com/RooCodeInc/Roo-Code/issues).
-- **Create an issue** using:
-    - **Enhancements:** "Enhancement Request" template (plain language focused on user benefit).
-    - **Bugs:** "Bug Report" template (minimal repro + expected vs actual + version).
-- **Want to work on it?** Comment "Claiming" on the issue and DM **Hannes Rudolph (`hrudolph`)** on [Discord](https://discord.gg/roocode) to get assigned. Assignment will be confirmed in the thread.
-- **PRs must link to the issue.** Unlinked PRs may be closed.
-
-### Deciding What to Work On
-
-- Check the [GitHub Project](https://github.com/orgs/RooCodeInc/projects/1) for "Issue [Unassigned]" issues.
-- For docs, visit [Roo Code Docs](https://github.com/RooCodeInc/Roo-Code-Docs).
-
-### Reporting Bugs
-
-- Check for existing reports first.
-- Create a new bug using the ["Bug Report" template](https://github.com/RooCodeInc/Roo-Code/issues/new/choose) with:
-    - Clear, numbered reproduction steps
-    - Expected vs actual result
-    - Roo Code version (required); API provider/model if relevant
-- **Security issues**: Report privately via [security advisories](https://github.com/RooCodeInc/Roo-Code/security/advisories/new).
-
-## Development & Submission Process
-
-### Development Setup
-
-1. **Fork & Clone:**
-
-```
-git clone https://github.com/YOUR_USERNAME/Roo-Code.git
+```sh
+git clone https://github.com/RooVetGit/Roo-Code.git
 ```
 
-2. **Install Dependencies:**
+2. **Install dependencies**:
 
+```sh
+npm run install:all
 ```
-pnpm install
+
+3. **Start the webview (Vite/React app with HMR)**:
+
+```sh
+npm run dev
 ```
 
-3. **Debugging:** Open with VS Code (`F5`).
+4. **Debug**:
+   Press `F5` (or **Run** → **Start Debugging**) in VSCode to open a new session with Roo Code loaded.
 
-### Writing Code Guidelines
+Changes to the webview will appear immediately. Changes to the core extension will require a restart of the extension host.
 
-- One focused PR per feature or fix.
-- Follow ESLint and TypeScript best practices.
-- Write clear, descriptive commits referencing issues (e.g., `Fixes #123`).
-- Provide thorough testing (`npm test`).
-- Rebase onto the latest `main` branch before submission.
+Alternatively you can build a .vsix and install it directly in VSCode:
 
-### Submitting a Pull Request
+```sh
+npm run build
+```
 
-- Begin as a **Draft PR** if seeking early feedback.
-- Clearly describe your changes following the Pull Request Template.
-- Link the issue in the PR description/title (e.g., "Fixes #123").
-- Provide screenshots/videos for UI changes.
-- Indicate if documentation updates are necessary.
+A `.vsix` file will appear in the `bin/` directory which can be installed with:
 
-### Pull Request Policy
+```sh
+code --install-extension bin/roo-cline-<version>.vsix
+```
 
-- Must reference an assigned GitHub Issue. To get assigned: comment "Claiming" on the issue and DM **Hannes Rudolph (`hrudolph`)** on [Discord](https://discord.gg/roocode). Assignment will be confirmed in the thread.
-- Unlinked PRs may be closed.
-- PRs should pass CI tests, align with the roadmap, and have clear documentation.
+## Writing and Submitting Code
 
-### Review Process
+Anyone can contribute code to Roo Code, but we ask that you follow these guidelines to ensure your contributions can be smoothly integrated:
 
-- **Daily Triage:** Quick checks by maintainers.
-- **Weekly In-depth Review:** Comprehensive assessment.
-- **Iterate promptly** based on feedback.
+1. **Keep Pull Requests Focused**
 
-## Legal
+    - Limit PRs to a single feature or bug fix
+    - Split larger changes into smaller, related PRs
+    - Break changes into logical commits that can be reviewed independently
 
-By contributing, you agree your contributions will be licensed under the Apache 2.0 License, consistent with Roo Code's licensing.
+2. **Code Quality**
+
+    - All PRs must pass CI checks which include both linting and formatting
+    - Address any ESLint warnings or errors before submitting
+    - Respond to all feedback from Ellipsis, our automated code review tool
+    - Follow TypeScript best practices and maintain type safety
+
+3. **Testing**
+
+    - Add tests for new features
+    - Run `npm test` to ensure all tests pass
+    - Update existing tests if your changes affect them
+    - Include both unit tests and integration tests where appropriate
+
+4. **Commit Guidelines**
+
+    - Write clear, descriptive commit messages
+    - Reference relevant issues in commits using #issue-number
+
+5. **Before Submitting**
+
+    - Rebase your branch on the latest main
+    - Ensure your branch builds successfully
+    - Double-check all tests are passing
+    - Review your changes for any debugging code or console logs
+
+6. **Pull Request Description**
+    - Clearly describe what your changes do
+    - Include steps to test the changes
+    - List any breaking changes
+    - Add screenshots for UI changes
+
+## Contribution Agreement
+
+By submitting a pull request, you agree that your contributions will be licensed under the same license as the project ([Apache 2.0](LICENSE)).

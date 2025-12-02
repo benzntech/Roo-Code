@@ -1,69 +1,35 @@
 import { Anthropic } from "@anthropic-ai/sdk"
+import { BetaThinkingConfigParam } from "@anthropic-ai/sdk/resources/beta"
+import axios, { AxiosRequestConfig } from "axios"
 import OpenAI from "openai"
+import delay from "delay"
 
-import {
-	openRouterDefaultModelId,
-	openRouterDefaultModelInfo,
-	OPENROUTER_DEFAULT_PROVIDER_NAME,
-	OPEN_ROUTER_PROMPT_CACHING_MODELS,
-	DEEP_SEEK_DEFAULT_TEMPERATURE,
-} from "@roo-code/types"
-
-import type { ApiHandlerOptions, ModelRecord } from "../../shared/api"
-
+import { ApiHandlerOptions, ModelInfo, openRouterDefaultModelId, openRouterDefaultModelInfo } from "../../shared/api"
+import { parseApiPrice } from "../../utils/cost"
 import { convertToOpenAiMessages } from "../transform/openai-format"
-import { resolveToolProtocol } from "../../utils/resolveToolProtocol"
-import { TOOL_PROTOCOL } from "@roo-code/types"
-import { ApiStreamChunk } from "../transform/stream"
+import { ApiStreamChunk, ApiStreamUsageChunk } from "../transform/stream"
 import { convertToR1Format } from "../transform/r1-format"
-import { addCacheBreakpoints as addAnthropicCacheBreakpoints } from "../transform/caching/anthropic"
-import { addCacheBreakpoints as addGeminiCacheBreakpoints } from "../transform/caching/gemini"
-import type { OpenRouterReasoningParams } from "../transform/reasoning"
-import { getModelParams } from "../transform/model-params"
 
-import { getModels } from "./fetchers/modelCache"
-import { getModelEndpoints } from "./fetchers/modelEndpointCache"
-
-import { DEFAULT_HEADERS } from "./constants"
+import { DEEP_SEEK_DEFAULT_TEMPERATURE } from "./constants"
+import { getModelParams, SingleCompletionHandler } from ".."
 import { BaseProvider } from "./base-provider"
-import type { ApiHandlerCreateMessageMetadata, SingleCompletionHandler } from "../index"
-import { handleOpenAIError } from "./utils/openai-error-handler"
-import { generateImageWithProvider, ImageGenerationResult } from "./utils/image-generation"
+import { defaultHeaders } from "./openai"
 
 // Add custom interface for OpenRouter params.
 type OpenRouterChatCompletionParams = OpenAI.Chat.ChatCompletionCreateParams & {
 	transforms?: string[]
 	include_reasoning?: boolean
-	// https://openrouter.ai/docs/use-cases/reasoning-tokens
-	reasoning?: OpenRouterReasoningParams
+	thinking?: BetaThinkingConfigParam
 }
 
-// See `OpenAI.Chat.Completions.ChatCompletionChunk["usage"]`
-// `CompletionsAPI.CompletionUsage`
-// See also: https://openrouter.ai/docs/use-cases/usage-accounting
-interface CompletionUsage {
-	completion_tokens?: number
-	completion_tokens_details?: {
-		reasoning_tokens?: number
-	}
-	prompt_tokens?: number
-	prompt_tokens_details?: {
-		cached_tokens?: number
-	}
-	total_tokens?: number
-	cost?: number
-	cost_details?: {
-		upstream_inference_cost?: number
-	}
+// Add custom interface for OpenRouter usage chunk.
+interface OpenRouterApiStreamUsageChunk extends ApiStreamUsageChunk {
+	fullResponseText: string
 }
 
 export class OpenRouterHandler extends BaseProvider implements SingleCompletionHandler {
 	protected options: ApiHandlerOptions
 	private client: OpenAI
-	protected models: ModelRecord = {}
-	protected endpoints: ModelRecord = {}
-	private readonly providerName = "OpenRouter"
-	private currentReasoningDetails: any[] = []
 
 	constructor(options: ApiHandlerOptions) {
 		super()
@@ -72,62 +38,14 @@ export class OpenRouterHandler extends BaseProvider implements SingleCompletionH
 		const baseURL = this.options.openRouterBaseUrl || "https://openrouter.ai/api/v1"
 		const apiKey = this.options.openRouterApiKey ?? "not-provided"
 
-		this.client = new OpenAI({ baseURL, apiKey, defaultHeaders: DEFAULT_HEADERS })
-
-		// Load models asynchronously to populate cache before getModel() is called
-		this.loadDynamicModels().catch((error) => {
-			console.error("[OpenRouterHandler] Failed to load dynamic models:", error)
-		})
-	}
-
-	private async loadDynamicModels(): Promise<void> {
-		try {
-			const [models, endpoints] = await Promise.all([
-				getModels({ provider: "openrouter" }),
-				getModelEndpoints({
-					router: "openrouter",
-					modelId: this.options.openRouterModelId,
-					endpoint: this.options.openRouterSpecificProvider,
-				}),
-			])
-
-			this.models = models
-			this.endpoints = endpoints
-		} catch (error) {
-			console.error("[OpenRouterHandler] Error loading dynamic models:", {
-				error: error instanceof Error ? error.message : String(error),
-				stack: error instanceof Error ? error.stack : undefined,
-			})
-		}
-	}
-
-	getReasoningDetails(): any[] | undefined {
-		return this.currentReasoningDetails.length > 0 ? this.currentReasoningDetails : undefined
+		this.client = new OpenAI({ baseURL, apiKey, defaultHeaders })
 	}
 
 	override async *createMessage(
 		systemPrompt: string,
 		messages: Anthropic.Messages.MessageParam[],
-		metadata?: ApiHandlerCreateMessageMetadata,
 	): AsyncGenerator<ApiStreamChunk> {
-		const model = await this.fetchModel()
-
-		let { id: modelId, maxTokens, temperature, topP, reasoning } = model
-
-		// Reset reasoning_details accumulator for this request
-		this.currentReasoningDetails = []
-
-		// OpenRouter sends reasoning tokens by default for Gemini 2.5 Pro models
-		// even if you don't request them. This is not the default for
-		// other providers (including Gemini), so we need to explicitly disable
-		// them unless the user has explicitly configured reasoning.
-		// Note: Gemini 3 models use reasoning_details format and should not be excluded.
-		if (
-			(modelId === "google/gemini-2.5-pro-preview" || modelId === "google/gemini-2.5-pro") &&
-			typeof reasoning === "undefined"
-		) {
-			reasoning = { exclude: true }
-		}
+		let { id: modelId, maxTokens, thinking, temperature, topP } = this.getModel()
 
 		// Convert Anthropic messages to OpenAI format.
 		let openAiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
@@ -140,108 +58,66 @@ export class OpenRouterHandler extends BaseProvider implements SingleCompletionH
 			openAiMessages = convertToR1Format([{ role: "user", content: systemPrompt }, ...messages])
 		}
 
-		// Process reasoning_details when switching models to Gemini for native tool call compatibility
-		const toolProtocol = resolveToolProtocol(this.options, model.info)
-		const isNativeProtocol = toolProtocol === TOOL_PROTOCOL.NATIVE
-		const isGemini = modelId.startsWith("google/gemini")
-
-		// For Gemini with native protocol: inject fake reasoning.encrypted blocks for tool calls
-		// This is required when switching from other models to Gemini to satisfy API validation
-		if (isNativeProtocol && isGemini) {
-			openAiMessages = openAiMessages.map((msg) => {
-				if (msg.role === "assistant") {
-					const toolCalls = (msg as any).tool_calls as any[] | undefined
-					const existingDetails = (msg as any).reasoning_details as any[] | undefined
-
-					// Only inject if there are tool calls and no existing encrypted reasoning
-					if (toolCalls && toolCalls.length > 0) {
-						const hasEncrypted = existingDetails?.some((d) => d.type === "reasoning.encrypted") ?? false
-
-						if (!hasEncrypted) {
-							const fakeEncrypted = toolCalls.map((tc, idx) => ({
-								id: tc.id,
-								type: "reasoning.encrypted",
-								data: "skip_thought_signature_validator",
-								format: "google-gemini-v1",
-								index: (existingDetails?.length ?? 0) + idx,
-							}))
-
-							return {
-								...msg,
-								reasoning_details: [...(existingDetails ?? []), ...fakeEncrypted],
-							}
-						}
-					}
+		// prompt caching: https://openrouter.ai/docs/prompt-caching
+		// this is specifically for claude models (some models may 'support prompt caching' automatically without this)
+		switch (true) {
+			case modelId.startsWith("anthropic/"):
+				openAiMessages[0] = {
+					role: "system",
+					content: [
+						{
+							type: "text",
+							text: systemPrompt,
+							// @ts-ignore-next-line
+							cache_control: { type: "ephemeral" },
+						},
+					],
 				}
-				return msg
-			})
-		}
+				// Add cache_control to the last two user messages
+				// (note: this works because we only ever add one user message at a time, but if we added multiple we'd need to mark the user message before the last assistant message)
+				const lastTwoUserMessages = openAiMessages.filter((msg) => msg.role === "user").slice(-2)
+				lastTwoUserMessages.forEach((msg) => {
+					if (typeof msg.content === "string") {
+						msg.content = [{ type: "text", text: msg.content }]
+					}
+					if (Array.isArray(msg.content)) {
+						// NOTE: this is fine since env details will always be added at the end. but if it weren't there, and the user added a image_url type message, it would pop a text part before it and then move it after to the end.
+						let lastTextPart = msg.content.filter((part) => part.type === "text").pop()
 
-		// https://openrouter.ai/docs/features/prompt-caching
-		// TODO: Add a `promptCacheStratey` field to `ModelInfo`.
-		if (OPEN_ROUTER_PROMPT_CACHING_MODELS.has(modelId)) {
-			if (modelId.startsWith("google")) {
-				addGeminiCacheBreakpoints(systemPrompt, openAiMessages)
-			} else {
-				addAnthropicCacheBreakpoints(systemPrompt, openAiMessages)
-			}
+						if (!lastTextPart) {
+							lastTextPart = { type: "text", text: "..." }
+							msg.content.push(lastTextPart)
+						}
+						// @ts-ignore-next-line
+						lastTextPart["cache_control"] = { type: "ephemeral" }
+					}
+				})
+				break
+			default:
+				break
 		}
-
-		const transforms = (this.options.openRouterUseMiddleOutTransform ?? true) ? ["middle-out"] : undefined
 
 		// https://openrouter.ai/docs/transforms
+		let fullResponseText = ""
+
 		const completionParams: OpenRouterChatCompletionParams = {
 			model: modelId,
-			...(maxTokens && maxTokens > 0 && { max_tokens: maxTokens }),
+			max_tokens: maxTokens,
 			temperature,
+			thinking, // OpenRouter is temporarily supporting this.
 			top_p: topP,
 			messages: openAiMessages,
 			stream: true,
-			stream_options: { include_usage: true },
-			// Only include provider if openRouterSpecificProvider is not "[default]".
-			...(this.options.openRouterSpecificProvider &&
-				this.options.openRouterSpecificProvider !== OPENROUTER_DEFAULT_PROVIDER_NAME && {
-					provider: {
-						order: [this.options.openRouterSpecificProvider],
-						only: [this.options.openRouterSpecificProvider],
-						allow_fallbacks: false,
-					},
-				}),
-			...(transforms && { transforms }),
-			...(reasoning && { reasoning }),
-			...(metadata?.tools && { tools: this.convertToolsForOpenAI(metadata.tools) }),
-			...(metadata?.tool_choice && { tool_choice: metadata.tool_choice }),
+			include_reasoning: true,
+			// This way, the transforms field will only be included in the parameters when openRouterUseMiddleOutTransform is true.
+			...((this.options.openRouterUseMiddleOutTransform ?? true) && { transforms: ["middle-out"] }),
 		}
 
-		// Add Anthropic beta header for fine-grained tool streaming when using Anthropic models
-		const requestOptions = modelId.startsWith("anthropic/")
-			? { headers: { "x-anthropic-beta": "fine-grained-tool-streaming-2025-05-14" } }
-			: undefined
+		const stream = await this.client.chat.completions.create(completionParams)
 
-		let stream
-		try {
-			stream = await this.client.chat.completions.create(completionParams, requestOptions)
-		} catch (error) {
-			throw handleOpenAIError(error, this.providerName)
-		}
+		let genId: string | undefined
 
-		let lastUsage: CompletionUsage | undefined = undefined
-		// Accumulator for reasoning_details: accumulate text by type-index key
-		const reasoningDetailsAccumulator = new Map<
-			string,
-			{
-				type: string
-				text?: string
-				summary?: string
-				data?: string
-				id?: string | null
-				format?: string
-				signature?: string
-				index: number
-			}
-		>()
-
-		for await (const chunk of stream) {
+		for await (const chunk of stream as unknown as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>) {
 			// OpenRouter returns an error object instead of the OpenAI SDK throwing an error.
 			if ("error" in chunk) {
 				const error = chunk.error as { message?: string; code?: number }
@@ -249,190 +125,96 @@ export class OpenRouterHandler extends BaseProvider implements SingleCompletionH
 				throw new Error(`OpenRouter API Error ${error?.code}: ${error?.message}`)
 			}
 
+			if (!genId && chunk.id) {
+				genId = chunk.id
+			}
+
 			const delta = chunk.choices[0]?.delta
-			const finishReason = chunk.choices[0]?.finish_reason
 
-			if (delta) {
-				// Handle reasoning_details array format (used by Gemini 3, Claude, OpenAI o-series, etc.)
-				// See: https://openrouter.ai/docs/use-cases/reasoning-tokens#preserving-reasoning-blocks
-				// Priority: Check for reasoning_details first, as it's the newer format
-				const deltaWithReasoning = delta as typeof delta & {
-					reasoning_details?: Array<{
-						type: string
-						text?: string
-						summary?: string
-						data?: string
-						id?: string | null
-						format?: string
-						signature?: string
-						index?: number
-					}>
-				}
-
-				if (deltaWithReasoning.reasoning_details && Array.isArray(deltaWithReasoning.reasoning_details)) {
-					for (const detail of deltaWithReasoning.reasoning_details) {
-						const index = detail.index ?? 0
-						const key = `${detail.type}-${index}`
-						const existing = reasoningDetailsAccumulator.get(key)
-
-						if (existing) {
-							// Accumulate text/summary/data for existing reasoning detail
-							if (detail.text !== undefined) {
-								existing.text = (existing.text || "") + detail.text
-							}
-							if (detail.summary !== undefined) {
-								existing.summary = (existing.summary || "") + detail.summary
-							}
-							if (detail.data !== undefined) {
-								existing.data = (existing.data || "") + detail.data
-							}
-							// Update other fields if provided
-							if (detail.id !== undefined) existing.id = detail.id
-							if (detail.format !== undefined) existing.format = detail.format
-							if (detail.signature !== undefined) existing.signature = detail.signature
-						} else {
-							// Start new reasoning detail accumulation
-							reasoningDetailsAccumulator.set(key, {
-								type: detail.type,
-								text: detail.text,
-								summary: detail.summary,
-								data: detail.data,
-								id: detail.id,
-								format: detail.format,
-								signature: detail.signature,
-								index,
-							})
-						}
-
-						// Yield text for display (still fragmented for live streaming)
-						let reasoningText: string | undefined
-						if (detail.type === "reasoning.text" && typeof detail.text === "string") {
-							reasoningText = detail.text
-						} else if (detail.type === "reasoning.summary" && typeof detail.summary === "string") {
-							reasoningText = detail.summary
-						}
-						// Note: reasoning.encrypted types are intentionally skipped as they contain redacted content
-
-						if (reasoningText) {
-							yield { type: "reasoning", text: reasoningText }
-						}
-					}
-				} else if ("reasoning" in delta && delta.reasoning && typeof delta.reasoning === "string") {
-					// Handle legacy reasoning format - only if reasoning_details is not present
-					// See: https://openrouter.ai/docs/use-cases/reasoning-tokens
-					yield { type: "reasoning", text: delta.reasoning }
-				}
-
-				// Emit raw tool call chunks - NativeToolCallParser handles state management
-				if ("tool_calls" in delta && Array.isArray(delta.tool_calls)) {
-					for (const toolCall of delta.tool_calls) {
-						yield {
-							type: "tool_call_partial",
-							index: toolCall.index,
-							id: toolCall.id,
-							name: toolCall.function?.name,
-							arguments: toolCall.function?.arguments,
-						}
-					}
-				}
-
-				if (delta.content) {
-					yield { type: "text", text: delta.content }
-				}
+			if ("reasoning" in delta && delta.reasoning) {
+				yield { type: "reasoning", text: delta.reasoning } as ApiStreamChunk
 			}
 
-			if (chunk.usage) {
-				lastUsage = chunk.usage
+			if (delta?.content) {
+				fullResponseText += delta.content
+				yield { type: "text", text: delta.content } as ApiStreamChunk
 			}
 		}
 
-		// After streaming completes, store the accumulated reasoning_details
-		if (reasoningDetailsAccumulator.size > 0) {
-			this.currentReasoningDetails = Array.from(reasoningDetailsAccumulator.values())
+		const endpoint = `${this.client.baseURL}/generation?id=${genId}`
+
+		const config: AxiosRequestConfig = {
+			headers: { Authorization: `Bearer ${this.options.openRouterApiKey}` },
+			timeout: 3_000,
 		}
 
-		if (lastUsage) {
-			yield {
-				type: "usage",
-				inputTokens: lastUsage.prompt_tokens || 0,
-				outputTokens: lastUsage.completion_tokens || 0,
-				cacheReadTokens: lastUsage.prompt_tokens_details?.cached_tokens,
-				reasoningTokens: lastUsage.completion_tokens_details?.reasoning_tokens,
-				totalCost: (lastUsage.cost_details?.upstream_inference_cost || 0) + (lastUsage.cost || 0),
+		let attempt = 0
+		let lastError: Error | undefined
+		const startTime = Date.now()
+
+		while (attempt++ < 10) {
+			await delay(attempt * 100) // Give OpenRouter some time to produce the generation metadata.
+
+			try {
+				const response = await axios.get(endpoint, config)
+				const generation = response.data?.data
+
+				yield {
+					type: "usage",
+					inputTokens: generation?.native_tokens_prompt || 0,
+					outputTokens: generation?.native_tokens_completion || 0,
+					totalCost: generation?.total_cost || 0,
+					fullResponseText,
+				} as OpenRouterApiStreamUsageChunk
+
+				break
+			} catch (error: unknown) {
+				if (error instanceof Error) {
+					lastError = error
+				}
 			}
 		}
-	}
 
-	public async fetchModel() {
-		const [models, endpoints] = await Promise.all([
-			getModels({ provider: "openrouter" }),
-			getModelEndpoints({
-				router: "openrouter",
-				modelId: this.options.openRouterModelId,
-				endpoint: this.options.openRouterSpecificProvider,
-			}),
-		])
-
-		this.models = models
-		this.endpoints = endpoints
-
-		return this.getModel()
+		if (lastError) {
+			console.error(
+				`Failed to fetch OpenRouter generation details after ${Date.now() - startTime}ms (${genId})`,
+				lastError,
+			)
+		}
 	}
 
 	override getModel() {
-		const id = this.options.openRouterModelId ?? openRouterDefaultModelId
-		let info = this.models[id] ?? openRouterDefaultModelInfo
+		const modelId = this.options.openRouterModelId
+		const modelInfo = this.options.openRouterModelInfo
 
-		// If a specific provider is requested, use the endpoint for that provider.
-		if (this.options.openRouterSpecificProvider && this.endpoints[this.options.openRouterSpecificProvider]) {
-			info = this.endpoints[this.options.openRouterSpecificProvider]
+		let id = modelId ?? openRouterDefaultModelId
+		const info = modelInfo ?? openRouterDefaultModelInfo
+
+		const isDeepSeekR1 = id.startsWith("deepseek/deepseek-r1") || modelId === "perplexity/sonar-reasoning"
+		const defaultTemperature = isDeepSeekR1 ? DEEP_SEEK_DEFAULT_TEMPERATURE : 0
+		const topP = isDeepSeekR1 ? 0.95 : undefined
+
+		return {
+			id,
+			info,
+			...getModelParams({ options: this.options, model: info, defaultTemperature }),
+			topP,
 		}
-
-		const isDeepSeekR1 = id.startsWith("deepseek/deepseek-r1") || id === "perplexity/sonar-reasoning"
-
-		const params = getModelParams({
-			format: "openrouter",
-			modelId: id,
-			model: info,
-			settings: this.options,
-			defaultTemperature: isDeepSeekR1 ? DEEP_SEEK_DEFAULT_TEMPERATURE : 0,
-		})
-
-		return { id, info, topP: isDeepSeekR1 ? 0.95 : undefined, ...params }
 	}
 
 	async completePrompt(prompt: string) {
-		let { id: modelId, maxTokens, temperature, reasoning } = await this.fetchModel()
+		let { id: modelId, maxTokens, thinking, temperature } = this.getModel()
 
 		const completionParams: OpenRouterChatCompletionParams = {
 			model: modelId,
 			max_tokens: maxTokens,
+			thinking,
 			temperature,
 			messages: [{ role: "user", content: prompt }],
 			stream: false,
-			// Only include provider if openRouterSpecificProvider is not "[default]".
-			...(this.options.openRouterSpecificProvider &&
-				this.options.openRouterSpecificProvider !== OPENROUTER_DEFAULT_PROVIDER_NAME && {
-					provider: {
-						order: [this.options.openRouterSpecificProvider],
-						only: [this.options.openRouterSpecificProvider],
-						allow_fallbacks: false,
-					},
-				}),
-			...(reasoning && { reasoning }),
 		}
 
-		// Add Anthropic beta header for fine-grained tool streaming when using Anthropic models
-		const requestOptions = modelId.startsWith("anthropic/")
-			? { headers: { "x-anthropic-beta": "fine-grained-tool-streaming-2025-05-14" } }
-			: undefined
-
-		let response
-		try {
-			response = await this.client.chat.completions.create(completionParams, requestOptions)
-		} catch (error) {
-			throw handleOpenAIError(error, this.providerName)
-		}
+		const response = await this.client.chat.completions.create(completionParams)
 
 		if ("error" in response) {
 			const error = response.error as { message?: string; code?: number }
@@ -442,38 +224,79 @@ export class OpenRouterHandler extends BaseProvider implements SingleCompletionH
 		const completion = response as OpenAI.Chat.ChatCompletion
 		return completion.choices[0]?.message?.content || ""
 	}
+}
 
-	/**
-	 * Generate an image using OpenRouter's image generation API (chat completions with modalities)
-	 * Note: OpenRouter only supports the chat completions approach, not the /images/generations endpoint
-	 * @param prompt The text prompt for image generation
-	 * @param model The model to use for generation
-	 * @param apiKey The OpenRouter API key (must be explicitly provided)
-	 * @param inputImage Optional base64 encoded input image data URL
-	 * @returns The generated image data and format, or an error
-	 */
-	async generateImage(
-		prompt: string,
-		model: string,
-		apiKey: string,
-		inputImage?: string,
-	): Promise<ImageGenerationResult> {
-		if (!apiKey) {
-			return {
-				success: false,
-				error: "OpenRouter API key is required for image generation",
+export async function getOpenRouterModels(options?: ApiHandlerOptions) {
+	const models: Record<string, ModelInfo> = {}
+
+	const baseURL = options?.openRouterBaseUrl || "https://openrouter.ai/api/v1"
+
+	try {
+		const response = await axios.get(`${baseURL}/models`)
+		const rawModels = response.data.data
+
+		for (const rawModel of rawModels) {
+			const modelInfo: ModelInfo = {
+				maxTokens: rawModel.top_provider?.max_completion_tokens,
+				contextWindow: rawModel.context_length,
+				supportsImages: rawModel.architecture?.modality?.includes("image"),
+				supportsPromptCache: false,
+				inputPrice: parseApiPrice(rawModel.pricing?.prompt),
+				outputPrice: parseApiPrice(rawModel.pricing?.completion),
+				description: rawModel.description,
+				thinking: rawModel.id === "anthropic/claude-3.7-sonnet:thinking",
 			}
+
+			// NOTE: this needs to be synced with api.ts/openrouter default model info.
+			switch (true) {
+				case rawModel.id.startsWith("anthropic/claude-3.7-sonnet"):
+					modelInfo.supportsComputerUse = true
+					modelInfo.supportsPromptCache = true
+					modelInfo.cacheWritesPrice = 3.75
+					modelInfo.cacheReadsPrice = 0.3
+					modelInfo.maxTokens = rawModel.id === "anthropic/claude-3.7-sonnet:thinking" ? 128_000 : 16_384
+					break
+				case rawModel.id.startsWith("anthropic/claude-3.5-sonnet-20240620"):
+					modelInfo.supportsPromptCache = true
+					modelInfo.cacheWritesPrice = 3.75
+					modelInfo.cacheReadsPrice = 0.3
+					modelInfo.maxTokens = 8192
+					break
+				case rawModel.id.startsWith("anthropic/claude-3.5-sonnet"):
+					modelInfo.supportsComputerUse = true
+					modelInfo.supportsPromptCache = true
+					modelInfo.cacheWritesPrice = 3.75
+					modelInfo.cacheReadsPrice = 0.3
+					modelInfo.maxTokens = 8192
+					break
+				case rawModel.id.startsWith("anthropic/claude-3-5-haiku"):
+					modelInfo.supportsPromptCache = true
+					modelInfo.cacheWritesPrice = 1.25
+					modelInfo.cacheReadsPrice = 0.1
+					modelInfo.maxTokens = 8192
+					break
+				case rawModel.id.startsWith("anthropic/claude-3-opus"):
+					modelInfo.supportsPromptCache = true
+					modelInfo.cacheWritesPrice = 18.75
+					modelInfo.cacheReadsPrice = 1.5
+					modelInfo.maxTokens = 8192
+					break
+				case rawModel.id.startsWith("anthropic/claude-3-haiku"):
+				default:
+					modelInfo.supportsPromptCache = true
+					modelInfo.cacheWritesPrice = 0.3
+					modelInfo.cacheReadsPrice = 0.03
+					modelInfo.maxTokens = 8192
+					break
+			}
+
+			models[rawModel.id] = modelInfo
 		}
-
-		const baseURL = this.options.openRouterBaseUrl || "https://openrouter.ai/api/v1"
-
-		// OpenRouter only supports chat completions approach for image generation
-		return generateImageWithProvider({
-			baseURL,
-			authToken: apiKey,
-			model,
-			prompt,
-			inputImage,
-		})
+	} catch (error) {
+		console.error(
+			`Error fetching OpenRouter models: ${JSON.stringify(error, Object.getOwnPropertyNames(error), 2)}`,
+		)
 	}
+
+	return models
 }

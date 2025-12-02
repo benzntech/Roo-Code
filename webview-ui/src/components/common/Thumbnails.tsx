@@ -1,6 +1,6 @@
 import React, { useState, useRef, useLayoutEffect, memo } from "react"
 import { useWindowSize } from "react-use"
-import { vscode } from "@src/utils/vscode"
+import { vscode } from "../../utils/vscode"
 
 interface ThumbnailsProps {
 	images: string[]
@@ -39,7 +39,6 @@ const Thumbnails = ({ images, style, setImages, onHeightChange }: ThumbnailsProp
 	return (
 		<div
 			ref={containerRef}
-			className="py-1"
 			style={{
 				display: "flex",
 				flexWrap: "wrap",

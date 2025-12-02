@@ -1,29 +1,25 @@
-import { ToolProtocol, TOOL_PROTOCOL, isNativeProtocol } from "@roo-code/types"
-
-export function getSharedToolUseSection(protocol: ToolProtocol = TOOL_PROTOCOL.XML): string {
-	if (isNativeProtocol(protocol)) {
-		return `====
-
-TOOL USE
-
-You have access to a set of tools that are executed upon the user's approval. Use the provider-native tool-calling mechanism. Do not include XML markup or examples.`
-	}
-
+export function getSharedToolUseSection(): string {
 	return `====
 
 TOOL USE
 
-You have access to a set of tools that are executed upon the user's approval. You must use exactly one tool per message, and every assistant message must include a tool call. You use tools step-by-step to accomplish a given task, with each tool use informed by the result of the previous tool use.
+You have access to a set of tools that are executed upon the user's approval. You can use one tool per message, and will receive the result of that tool use in the user's response. You use tools step-by-step to accomplish a given task, with each tool use informed by the result of the previous tool use.
 
 # Tool Use Formatting
 
-Tool uses are formatted using XML-style tags. The tool name itself becomes the XML tag name. Each parameter is enclosed within its own set of tags. Here's the structure:
+Tool use is formatted using XML-style tags. The tool name is enclosed in opening and closing tags, and each parameter is similarly enclosed within its own set of tags. Here's the structure:
 
-<actual_tool_name>
+<tool_name>
 <parameter1_name>value1</parameter1_name>
 <parameter2_name>value2</parameter2_name>
 ...
-</actual_tool_name>
+</tool_name>
 
-Always use the actual tool name as the XML tag name for proper parsing and execution.`
+For example:
+
+<read_file>
+<path>src/main.js</path>
+</read_file>
+
+Always adhere to this format for the tool use to ensure proper parsing and execution.`
 }

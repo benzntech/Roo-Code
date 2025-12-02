@@ -1,10 +1,7 @@
-import { useMemo, useRef, useState, useEffect } from "react"
-import { useTranslation } from "react-i18next"
-import { cn } from "@/lib/utils"
+import { useMemo } from "react"
 
 import { CheckpointMenu } from "./CheckpointMenu"
 import { checkpointSchema } from "./schema"
-import { GitCommitVertical } from "lucide-react"
 
 type CheckpointSavedProps = {
 	ts: number
@@ -13,40 +10,8 @@ type CheckpointSavedProps = {
 	checkpoint?: Record<string, unknown>
 }
 
-export const CheckpointSaved = ({ checkpoint, currentHash, ...props }: CheckpointSavedProps) => {
-	const { t } = useTranslation()
-	const isCurrent = currentHash === props.commitHash
-	const [isPopoverOpen, setIsPopoverOpen] = useState(false)
-	const [isClosing, setIsClosing] = useState(false)
-	const closeTimer = useRef<number | null>(null)
-
-	useEffect(() => {
-		return () => {
-			if (closeTimer.current) {
-				window.clearTimeout(closeTimer.current)
-				closeTimer.current = null
-			}
-		}
-	}, [])
-
-	const handlePopoverOpenChange = (open: boolean) => {
-		setIsPopoverOpen(open)
-		if (open) {
-			setIsClosing(false)
-			if (closeTimer.current) {
-				window.clearTimeout(closeTimer.current)
-				closeTimer.current = null
-			}
-		} else {
-			setIsClosing(true)
-			closeTimer.current = window.setTimeout(() => {
-				setIsClosing(false)
-				closeTimer.current = null
-			}, 200) // keep menu visible briefly to avoid popover jump
-		}
-	}
-
-	const menuVisible = isPopoverOpen || isClosing
+export const CheckpointSaved = ({ checkpoint, ...props }: CheckpointSavedProps) => {
+	const isCurrent = props.currentHash === props.commitHash
 
 	const metadata = useMemo(() => {
 		if (!checkpoint) {
@@ -67,30 +32,13 @@ export const CheckpointSaved = ({ checkpoint, currentHash, ...props }: Checkpoin
 	}
 
 	return (
-		<div className="group flex items-center justify-between gap-2 pt-2 pb-3 ">
-			<div className="flex items-center gap-2 text-blue-400 whitespace-nowrap">
-				<GitCommitVertical className="w-4" />
-				<span className="font-semibold">{t("chat:checkpoint.regular")}</span>
-				{isCurrent && <span className="text-muted">({t("chat:checkpoint.current")})</span>}
+		<div className="flex items-center justify-between">
+			<div className="flex gap-2">
+				<span className="codicon codicon-git-commit text-blue-400" />
+				<span className="font-bold">{metadata.isFirst ? "Initial Checkpoint" : "Checkpoint"}</span>
+				{isCurrent && <span className="text-muted text-sm">Current</span>}
 			</div>
-			<span
-				className="block w-full h-[2px] mt-[2px] text-xs"
-				style={{
-					backgroundImage:
-						"linear-gradient(90deg, rgba(0, 188, 255, .65), rgba(0, 188, 255, .65) 80%, rgba(0, 188, 255, 0) 99%)",
-				}}></span>
-
-			{/* Keep menu visible while popover is open or briefly after close to prevent jump */}
-			<div
-				data-testid="checkpoint-menu-container"
-				className={cn("h-4 -mt-2", menuVisible ? "block" : "hidden group-hover:block")}>
-				<CheckpointMenu
-					ts={props.ts}
-					commitHash={props.commitHash}
-					checkpoint={metadata}
-					onOpenChange={handlePopoverOpenChange}
-				/>
-			</div>
+			<CheckpointMenu {...props} checkpoint={metadata} />
 		</div>
 	)
 }
