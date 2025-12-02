@@ -1,6 +1,5 @@
 import posthog from "posthog-js"
-
-import type { TelemetrySetting } from "@roo-code/types"
+import { TelemetrySetting } from "../../../src/shared/TelemetrySetting"
 
 class TelemetryClient {
 	private static instance: TelemetryClient
@@ -9,17 +8,15 @@ class TelemetryClient {
 	public updateTelemetryState(telemetrySetting: TelemetrySetting, apiKey?: string, distinctId?: string) {
 		posthog.reset()
 
-		if (telemetrySetting !== "disabled" && apiKey && distinctId) {
+		if (telemetrySetting === "enabled" && apiKey && distinctId) {
 			TelemetryClient.telemetryEnabled = true
 
 			posthog.init(apiKey, {
-				api_host: "https://ph.roocode.com",
-				ui_host: "https://us.posthog.com",
+				api_host: "https://us.i.posthog.com",
 				persistence: "localStorage",
 				loaded: () => posthog.identify(distinctId),
 				capture_pageview: false,
 				capture_pageleave: false,
-				autocapture: false,
 			})
 		} else {
 			TelemetryClient.telemetryEnabled = false
@@ -30,7 +27,6 @@ class TelemetryClient {
 		if (!TelemetryClient.instance) {
 			TelemetryClient.instance = new TelemetryClient()
 		}
-
 		return TelemetryClient.instance
 	}
 
@@ -38,8 +34,8 @@ class TelemetryClient {
 		if (TelemetryClient.telemetryEnabled) {
 			try {
 				posthog.capture(eventName, properties)
-			} catch (_error) {
-				// Silently fail if there's an error capturing an event.
+			} catch (error) {
+				// Silently fail if there's an error capturing an event
 			}
 		}
 	}

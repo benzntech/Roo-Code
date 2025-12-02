@@ -1,38 +1,14 @@
+import { mentionRegex } from "../../../src/shared/context-mentions"
 import { Fzf } from "fzf"
-
-import type { ModeConfig } from "@roo-code/types"
-import type { Command } from "@roo/ExtensionMessage"
-
-import { mentionRegex } from "@roo/context-mentions"
-
-import { escapeSpaces } from "./path-mentions"
-
-/**
- * Gets the description for a mode, prioritizing description > whenToUse > roleDefinition
- * and taking only the first line
- */
-function getModeDescription(mode: ModeConfig): string {
-	return (mode.description || mode.whenToUse || mode.roleDefinition).split("\n")[0]
-}
-
-export interface SearchResult {
-	path: string
-	type: "file" | "folder"
-	label?: string
-}
-
-function getBasename(filepath: string): string {
-	return filepath.split("/").pop() || filepath
-}
+import { ModeConfig } from "../../../src/shared/modes"
 
 export function insertMention(
 	text: string,
 	position: number,
 	value: string,
-	isSlashCommand: boolean = false,
 ): { newValue: string; mentionIndex: number } {
-	// Handle slash command selection (only when explicitly selecting a slash command)
-	if (isSlashCommand) {
+	// Handle slash command
+	if (text.startsWith("/")) {
 		return {
 			newValue: value,
 			mentionIndex: 0,
@@ -45,31 +21,17 @@ export function insertMention(
 	// Find the position of the last '@' symbol before the cursor
 	const lastAtIndex = beforeCursor.lastIndexOf("@")
 
-	// Process the value - escape spaces if it's a file path
-	let processedValue = value
-	if (value && value.startsWith("/")) {
-		// Only escape if the path contains spaces that aren't already escaped
-		if (value.includes(" ") && !value.includes("\\ ")) {
-			processedValue = escapeSpaces(value)
-		}
-	}
-
 	let newValue: string
 	let mentionIndex: number
 
 	if (lastAtIndex !== -1) {
 		// If there's an '@' symbol, replace everything after it with the new mention
 		const beforeMention = text.slice(0, lastAtIndex)
-		// Only replace if afterCursor is all alphanumerical
-		// This is required to handle languages that don't use space as a word separator (chinese, japanese, korean, etc)
-		const afterCursorContent = /^[a-zA-Z0-9\s]*$/.test(afterCursor)
-			? afterCursor.replace(/^[^\s]*/, "")
-			: afterCursor
-		newValue = beforeMention + "@" + processedValue + " " + afterCursorContent
+		newValue = beforeMention + "@" + value + " " + afterCursor.replace(/^[^\s]*/, "")
 		mentionIndex = lastAtIndex
 	} else {
 		// If there's no '@' symbol, insert the mention at the cursor position
-		newValue = beforeCursor + "@" + processedValue + " " + afterCursor
+		newValue = beforeCursor + "@" + value + " " + afterCursor
 		mentionIndex = position
 	}
 
@@ -85,11 +47,8 @@ export function removeMention(text: string, position: number): { newText: string
 
 	if (matchEnd) {
 		// If we're at the end of a mention, remove it
-		// Remove the mention and the first space that follows it
-		const mentionLength = matchEnd[0].length
-		// Remove the mention and one space after it if it exists
-		const newText = text.slice(0, position - mentionLength) + afterCursor.replace(/^\s/, "")
-		const newPosition = position - mentionLength
+		const newText = text.slice(0, position - matchEnd[0].length) + afterCursor.replace(" ", "") // removes the first space after the mention
+		const newPosition = position - matchEnd[0].length
 		return { newText, newPosition }
 	}
 
@@ -107,8 +66,6 @@ export enum ContextMenuOptionType {
 	Git = "git",
 	NoResults = "noResults",
 	Mode = "mode", // Add mode type
-	Command = "command", // Add command type
-	SectionHeader = "sectionHeader", // Add section header type
 }
 
 export interface ContextMenuQueryItem {
@@ -117,102 +74,46 @@ export interface ContextMenuQueryItem {
 	label?: string
 	description?: string
 	icon?: string
-	slashCommand?: string
-	secondaryText?: string
-	argumentHint?: string
 }
 
 export function getContextMenuOptions(
 	query: string,
 	selectedType: ContextMenuOptionType | null = null,
 	queryItems: ContextMenuQueryItem[],
-	dynamicSearchResults: SearchResult[] = [],
 	modes?: ModeConfig[],
-	commands?: Command[],
 ): ContextMenuQueryItem[] {
-	// Handle slash commands for modes and commands
-	// Only process as slash command if the query itself starts with "/" (meaning we're typing a slash command)
+	// Handle slash commands for modes
 	if (query.startsWith("/")) {
-		const slashQuery = query.slice(1)
-		const results: ContextMenuQueryItem[] = []
+		const modeQuery = query.slice(1)
+		if (!modes?.length) return [{ type: ContextMenuOptionType.NoResults }]
 
-		// Add command suggestions first (prioritize commands at the top)
-		if (commands?.length) {
-			// Create searchable strings array for fzf
-			const searchableCommands = commands.map((command) => ({
-				original: command,
-				searchStr: command.name,
-			}))
+		// Create searchable strings array for fzf
+		const searchableItems = modes.map((mode) => ({
+			original: mode,
+			searchStr: mode.name,
+		}))
 
-			// Initialize fzf instance for fuzzy search
-			const fzf = new Fzf(searchableCommands, {
-				selector: (item) => item.searchStr,
-			})
+		// Initialize fzf instance for fuzzy search
+		const fzf = new Fzf(searchableItems, {
+			selector: (item) => item.searchStr,
+		})
 
-			// Get fuzzy matching commands
-			const matchingCommands = slashQuery
-				? fzf.find(slashQuery).map((result) => ({
-						type: ContextMenuOptionType.Command,
-						value: result.item.original.name,
-						slashCommand: `/${result.item.original.name}`,
-						description: result.item.original.description,
-						argumentHint: result.item.original.argumentHint,
-					}))
-				: commands.map((command) => ({
-						type: ContextMenuOptionType.Command,
-						value: command.name,
-						slashCommand: `/${command.name}`,
-						description: command.description,
-						argumentHint: command.argumentHint,
-					}))
+		// Get fuzzy matching items
+		const matchingModes = modeQuery
+			? fzf.find(modeQuery).map((result) => ({
+					type: ContextMenuOptionType.Mode,
+					value: result.item.original.slug,
+					label: result.item.original.name,
+					description: result.item.original.roleDefinition.split("\n")[0],
+				}))
+			: modes.map((mode) => ({
+					type: ContextMenuOptionType.Mode,
+					value: mode.slug,
+					label: mode.name,
+					description: mode.roleDefinition.split("\n")[0],
+				}))
 
-			if (matchingCommands.length > 0) {
-				results.push({
-					type: ContextMenuOptionType.SectionHeader,
-					label: "Commands",
-				})
-				results.push(...matchingCommands)
-			}
-		}
-
-		// Add mode suggestions second
-		if (modes?.length) {
-			// Create searchable strings array for fzf
-			const searchableItems = modes.map((mode) => ({
-				original: mode,
-				searchStr: mode.name,
-			}))
-
-			// Initialize fzf instance for fuzzy search
-			const fzf = new Fzf(searchableItems, {
-				selector: (item) => item.searchStr,
-			})
-
-			// Get fuzzy matching items
-			const matchingModes = slashQuery
-				? fzf.find(slashQuery).map((result) => ({
-						type: ContextMenuOptionType.Mode,
-						value: result.item.original.slug,
-						slashCommand: `/${result.item.original.slug}`,
-						description: getModeDescription(result.item.original),
-					}))
-				: modes.map((mode) => ({
-						type: ContextMenuOptionType.Mode,
-						value: mode.slug,
-						slashCommand: `/${mode.slug}`,
-						description: getModeDescription(mode),
-					}))
-
-			if (matchingModes.length > 0) {
-				results.push({
-					type: ContextMenuOptionType.SectionHeader,
-					label: "Modes",
-				})
-				results.push(...matchingModes)
-			}
-		}
-
-		return results.length > 0 ? results : [{ type: ContextMenuOptionType.NoResults }]
+		return matchingModes.length > 0 ? matchingModes : [{ type: ContextMenuOptionType.NoResults }]
 	}
 
 	const workingChanges: ContextMenuQueryItem = {
@@ -302,6 +203,7 @@ export function getContextMenuOptions(
 		}
 	}
 
+	// Create searchable strings array for fzf
 	const searchableItems = queryItems.map((item) => ({
 		original: item,
 		searchStr: [item.value, item.label, item.description].filter(Boolean).join(" "),
@@ -316,83 +218,65 @@ export function getContextMenuOptions(
 	const matchingItems = query ? fzf.find(query).map((result) => result.item.original) : []
 
 	// Separate matches by type
-	const openedFileMatches = matchingItems.filter((item) => item.type === ContextMenuOptionType.OpenedFile)
-
-	const gitMatches = matchingItems.filter((item) => item.type === ContextMenuOptionType.Git)
-
-	// Convert search results to queryItems format
-	const searchResultItems = dynamicSearchResults.map((result) => {
-		// Ensure paths start with / for consistency
-		const formattedPath = result.path.startsWith("/") ? result.path : `/${result.path}`
-
-		// For display purposes, we don't escape spaces in the label or description
-		const displayPath = formattedPath
-		const displayName = result.label || getBasename(result.path)
-
-		// We don't need to escape spaces here because the insertMention function
-		// will handle that when the user selects a suggestion
-
-		return {
-			type: result.type === "folder" ? ContextMenuOptionType.Folder : ContextMenuOptionType.File,
-			value: formattedPath,
-			label: displayName,
-			description: displayPath,
-		}
-	})
-
-	const allItems = [...suggestions, ...openedFileMatches, ...searchResultItems, ...gitMatches]
-
-	// Remove duplicates - normalize paths by ensuring all have leading slashes
-	const seen = new Set()
-	const deduped = allItems.filter((item) => {
-		// Normalize paths for deduplication by ensuring leading slashes
-		const normalizedValue = item.value
-		let key = ""
-		if (
+	const fileMatches = matchingItems.filter(
+		(item) =>
 			item.type === ContextMenuOptionType.File ||
-			item.type === ContextMenuOptionType.Folder ||
-			item.type === ContextMenuOptionType.OpenedFile
-		) {
-			key = normalizedValue!
-		} else {
-			key = `${item.type}-${normalizedValue}`
-		}
-		if (seen.has(key)) return false
-		seen.add(key)
-		return true
-	})
+			item.type === ContextMenuOptionType.OpenedFile ||
+			item.type === ContextMenuOptionType.Folder,
+	)
+	const gitMatches = matchingItems.filter((item) => item.type === ContextMenuOptionType.Git)
+	const otherMatches = matchingItems.filter(
+		(item) =>
+			item.type !== ContextMenuOptionType.File &&
+			item.type !== ContextMenuOptionType.OpenedFile &&
+			item.type !== ContextMenuOptionType.Folder &&
+			item.type !== ContextMenuOptionType.Git,
+	)
 
-	return deduped.length > 0 ? deduped : [{ type: ContextMenuOptionType.NoResults }]
+	// Combine suggestions with matching items in the desired order
+	if (suggestions.length > 0 || matchingItems.length > 0) {
+		const allItems = [...suggestions, ...fileMatches, ...gitMatches, ...otherMatches]
+
+		// Remove duplicates based on type and value
+		const seen = new Set()
+		const deduped = allItems.filter((item) => {
+			const key = `${item.type}-${item.value}`
+			if (seen.has(key)) return false
+			seen.add(key)
+			return true
+		})
+
+		return deduped
+	}
+
+	return [{ type: ContextMenuOptionType.NoResults }]
 }
 
 export function shouldShowContextMenu(text: string, position: number): boolean {
-	const beforeCursor = text.slice(0, position)
-
-	// Check if we're in a slash command context (at the beginning and no space yet)
-	if (text.startsWith("/") && !text.includes(" ") && position <= text.length) {
-		return true
+	// Handle slash command
+	if (text.startsWith("/")) {
+		return position <= text.length && !text.includes(" ")
 	}
 
-	// Check for @ mention context
+	const beforeCursor = text.slice(0, position)
 	const atIndex = beforeCursor.lastIndexOf("@")
 
-	if (atIndex === -1) {
-		return false
-	}
+	if (atIndex === -1) return false
 
 	const textAfterAt = beforeCursor.slice(atIndex + 1)
 
-	// Check if there's any unescaped whitespace after the '@'
-	// We need to check for whitespace that isn't preceded by a backslash
-	// Using a negative lookbehind to ensure the space isn't escaped
-	const hasUnescapedSpace = /(?<!\\)\s/.test(textAfterAt)
-	if (hasUnescapedSpace) return false
+	// Check if there's any whitespace after the '@'
+	if (/\s/.test(textAfterAt)) return false
 
-	// Don't show the menu if it's clearly a URL
-	if (textAfterAt.toLowerCase().startsWith("http")) {
+	// Don't show the menu if it's a URL
+	if (textAfterAt.toLowerCase().startsWith("http")) return false
+
+	// Don't show the menu if it's a problems or terminal
+	if (textAfterAt.toLowerCase().startsWith("problems") || textAfterAt.toLowerCase().startsWith("terminal"))
 		return false
-	}
 
-	// Show menu in all other cases
+	// NOTE: it's okay that menu shows when there's trailing punctuation since user could be inputting a path with marks
+
+	// Show the menu if there's just '@' or '@' followed by some text (but not a URL)
 	return true
 }

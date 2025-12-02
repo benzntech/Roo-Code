@@ -1,26 +1,27 @@
 {
 	"$schema": "https://unpkg.com/knip@latest/schema.json",
+	"entry": ["src/extension.ts", "src/activate/index.ts", "webview-ui/src/index.tsx"],
+	"project": ["src/**/*.ts", "webview-ui/src/**/*.{ts,tsx}"],
 	"ignore": [
+		"**/__mocks__/**",
 		"**/__tests__/**",
-		"apps/vscode-e2e/**",
-		"src/extension/api.ts",
+		"**/test/**",
+		"**/*.test.ts",
+		"**/*.test.tsx",
+		"**/stories/**",
+		"coverage/**",
+		"dist/**",
+		"out/**",
+		"bin/**",
+		"e2e/**",
 		"src/activate/**",
-		"src/workers/countTokens.ts",
-		"src/extension.ts",
-		"scripts/**",
-		"apps/web-roo-code/next-sitemap.config.cjs"
+		"src/exports/**",
+		"src/extension.ts"
 	],
 	"workspaces": {
-		"src": {
-			"entry": ["extension.ts"],
-			"project": ["**/*.ts"]
-		},
 		"webview-ui": {
-			"entry": ["src/index.tsx", "src/browser-panel.tsx"],
-			"project": ["src/**/*.{ts,tsx}", "../src/shared/*.ts"]
-		},
-		"packages/{build,cloud,evals,ipc,telemetry,types}": {
-			"project": ["src/**/*.ts"]
+			"entry": ["src/index.tsx"],
+			"project": ["src/**/*.{ts,tsx}"]
 		}
 	}
 }

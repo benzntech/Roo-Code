@@ -1,53 +1,70 @@
+import { VSCodeButton, VSCodeLink } from "@vscode/webview-ui-toolkit/react"
 import { memo, useState } from "react"
-import { Trans } from "react-i18next"
-import { VSCodeLink } from "@vscode/webview-ui-toolkit/react"
+import styled from "styled-components"
+import { vscode } from "../../utils/vscode"
+import { TelemetrySetting } from "../../../../src/shared/TelemetrySetting"
 
-import type { TelemetrySetting } from "@roo-code/types"
+const BannerContainer = styled.div`
+	background-color: var(--vscode-banner-background);
+	padding: 12px 20px;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	flex-shrink: 0;
+	margin-bottom: 6px;
+`
 
-import { vscode } from "@src/utils/vscode"
-import { useAppTranslation } from "@src/i18n/TranslationContext"
+const ButtonContainer = styled.div`
+	display: flex;
+	gap: 8px;
+	width: 100%;
+	& > vscode-button {
+		flex: 1;
+	}
+`
 
 const TelemetryBanner = () => {
-	const { t } = useAppTranslation()
-	const [isDismissed, setIsDismissed] = useState(false)
+	const [hasChosen, setHasChosen] = useState(false)
 
-	const handleClose = () => {
-		setIsDismissed(true)
+	const handleAllow = () => {
+		setHasChosen(true)
 		vscode.postMessage({ type: "telemetrySetting", text: "enabled" satisfies TelemetrySetting })
 	}
 
-	const handleOpenSettings = () => {
-		window.postMessage({
-			type: "action",
-			action: "settingsButtonClicked",
-			values: { section: "about" },
-		})
+	const handleDeny = () => {
+		setHasChosen(true)
+		vscode.postMessage({ type: "telemetrySetting", text: "disabled" satisfies TelemetrySetting })
 	}
 
-	if (isDismissed) {
-		return null
+	const handleOpenSettings = () => {
+		window.postMessage({ type: "action", action: "settingsButtonClicked" })
 	}
 
 	return (
-		<div className="relative px-4 py-2.5 pr-10 bg-vscode-banner-background border-b border-vscode-panel-border text-sm leading-normal text-vscode-foreground">
-			{/* Close button (X) */}
-			<button
-				onClick={handleClose}
-				className="absolute top-1.5 right-2 bg-transparent border-none text-vscode-foreground cursor-pointer text-2xl p-1 opacity-70 hover:opacity-100 transition-opacity duration-200 leading-none"
-				aria-label="Close">
-				×
-			</button>
-
-			<div className="mb-0.5 font-bold">{t("welcome:telemetry.helpImprove")}</div>
+		<BannerContainer>
 			<div>
-				<Trans
-					i18nKey="welcome:telemetry.helpImproveMessage"
-					components={{
-						settingsLink: <VSCodeLink href="#" onClick={handleOpenSettings} />,
-					}}
-				/>
+				<strong>Help Improve Roo Code</strong>
+				<div className="mt-1">
+					Send anonymous error and usage data to help us fix bugs and improve the extension. No code, prompts,
+					or personal information is ever sent.
+					<div className="mt-1">
+						You can always change this at the bottom of the{" "}
+						<VSCodeLink href="#" onClick={handleOpenSettings}>
+							settings
+						</VSCodeLink>
+						.
+					</div>
+				</div>
 			</div>
-		</div>
+			<ButtonContainer>
+				<VSCodeButton appearance="primary" onClick={handleAllow} disabled={hasChosen}>
+					Allow
+				</VSCodeButton>
+				<VSCodeButton appearance="secondary" onClick={handleDeny} disabled={hasChosen}>
+					Deny
+				</VSCodeButton>
+			</ButtonContainer>
+		</BannerContainer>
 	)
 }
 

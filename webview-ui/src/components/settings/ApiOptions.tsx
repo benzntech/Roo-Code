@@ -1,134 +1,83 @@
 import React, { memo, useCallback, useEffect, useMemo, useState } from "react"
-import { convertHeadersToObject } from "./utils/headers"
-import { useDebounce } from "react-use"
-import { VSCodeLink } from "@vscode/webview-ui-toolkit/react"
-import { ExternalLinkIcon } from "@radix-ui/react-icons"
+import { useDebounce, useEvent } from "react-use"
+import { Checkbox, Dropdown, type DropdownOption } from "vscrui"
+import { VSCodeLink, VSCodeRadio, VSCodeRadioGroup, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
+import * as vscodemodels from "vscode"
+
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue, Button } from "@/components/ui"
 
 import {
-	type ProviderName,
-	type ProviderSettings,
-	DEFAULT_CONSECUTIVE_MISTAKE_LIMIT,
-	openRouterDefaultModelId,
-	requestyDefaultModelId,
-	glamaDefaultModelId,
-	unboundDefaultModelId,
-	litellmDefaultModelId,
-	openAiNativeDefaultModelId,
+	ApiConfiguration,
+	ModelInfo,
 	anthropicDefaultModelId,
-	doubaoDefaultModelId,
-	claudeCodeDefaultModelId,
-	qwenCodeDefaultModelId,
-	geminiDefaultModelId,
-	deepSeekDefaultModelId,
-	moonshotDefaultModelId,
-	mistralDefaultModelId,
-	xaiDefaultModelId,
-	groqDefaultModelId,
-	cerebrasDefaultModelId,
-	chutesDefaultModelId,
-	basetenDefaultModelId,
+	anthropicModels,
+	azureOpenAiDefaultApiVersion,
 	bedrockDefaultModelId,
+	bedrockModels,
+	deepSeekDefaultModelId,
+	deepSeekModels,
+	geminiDefaultModelId,
+	geminiModels,
+	glamaDefaultModelId,
+	glamaDefaultModelInfo,
+	mistralDefaultModelId,
+	mistralModels,
+	openAiModelInfoSaneDefaults,
+	openAiNativeDefaultModelId,
+	openAiNativeModels,
+	openRouterDefaultModelId,
+	openRouterDefaultModelInfo,
 	vertexDefaultModelId,
-	sambaNovaDefaultModelId,
-	internationalZAiDefaultModelId,
-	mainlandZAiDefaultModelId,
-	fireworksDefaultModelId,
-	featherlessDefaultModelId,
-	ioIntelligenceDefaultModelId,
-	rooDefaultModelId,
-	vercelAiGatewayDefaultModelId,
-	deepInfraDefaultModelId,
-	minimaxDefaultModelId,
-	type ToolProtocol,
-	TOOL_PROTOCOL,
-} from "@roo-code/types"
+	vertexModels,
+	unboundDefaultModelId,
+	unboundDefaultModelInfo,
+	requestyDefaultModelId,
+	requestyDefaultModelInfo,
+} from "../../../../src/shared/api"
+import { ExtensionMessage } from "../../../../src/shared/ExtensionMessage"
 
-import { vscode } from "@src/utils/vscode"
-import { validateApiConfigurationExcludingModelErrors, getModelValidationError } from "@src/utils/validate"
-import { useAppTranslation } from "@src/i18n/TranslationContext"
-import { useRouterModels } from "@src/components/ui/hooks/useRouterModels"
-import { useSelectedModel } from "@src/components/ui/hooks/useSelectedModel"
-import { useExtensionState } from "@src/context/ExtensionStateContext"
-import {
-	useOpenRouterModelProviders,
-	OPENROUTER_DEFAULT_PROVIDER_NAME,
-} from "@src/components/ui/hooks/useOpenRouterModelProviders"
-import { filterProviders, filterModels } from "./utils/organizationFilters"
-import {
-	Select,
-	SelectTrigger,
-	SelectValue,
-	SelectContent,
-	SelectItem,
-	SearchableSelect,
-	Collapsible,
-	CollapsibleTrigger,
-	CollapsibleContent,
-} from "@src/components/ui"
-
-import {
-	Anthropic,
-	Baseten,
-	Bedrock,
-	Cerebras,
-	Chutes,
-	ClaudeCode,
-	DeepSeek,
-	Doubao,
-	Gemini,
-	Glama,
-	Groq,
-	HuggingFace,
-	IOIntelligence,
-	LMStudio,
-	LiteLLM,
-	Mistral,
-	Moonshot,
-	Ollama,
-	OpenAI,
-	OpenAICompatible,
-	OpenRouter,
-	QwenCode,
-	Requesty,
-	Roo,
-	SambaNova,
-	Unbound,
-	Vertex,
-	VSCodeLM,
-	XAI,
-	ZAi,
-	Fireworks,
-	Featherless,
-	VercelAiGateway,
-	DeepInfra,
-	MiniMax,
-} from "./providers"
-
-import { MODELS_BY_PROVIDER, PROVIDERS } from "./constants"
-import { inputEventTransform, noTransform } from "./transforms"
+import { vscode } from "../../utils/vscode"
+import { VSCodeButtonLink } from "../common/VSCodeButtonLink"
 import { ModelInfoView } from "./ModelInfoView"
+import { ModelPicker } from "./ModelPicker"
+import { TemperatureControl } from "./TemperatureControl"
+import { validateApiConfiguration, validateModelId, validateBedrockArn } from "@/utils/validate"
 import { ApiErrorMessage } from "./ApiErrorMessage"
 import { ThinkingBudget } from "./ThinkingBudget"
-import { SimpleThinkingBudget } from "./SimpleThinkingBudget"
-import { Verbosity } from "./Verbosity"
-import { DiffSettingsControl } from "./DiffSettingsControl"
-import { TodoListSettingsControl } from "./TodoListSettingsControl"
-import { TemperatureControl } from "./TemperatureControl"
-import { RateLimitSecondsControl } from "./RateLimitSecondsControl"
-import { ConsecutiveMistakeLimitControl } from "./ConsecutiveMistakeLimitControl"
-import { BedrockCustomArn } from "./providers/BedrockCustomArn"
-import { RooBalanceDisplay } from "./providers/RooBalanceDisplay"
-import { buildDocLink } from "@src/utils/docLinks"
-import { BookOpenText } from "lucide-react"
 
-export interface ApiOptionsProps {
+const modelsByProvider: Record<string, Record<string, ModelInfo>> = {
+	anthropic: anthropicModels,
+	bedrock: bedrockModels,
+	vertex: vertexModels,
+	gemini: geminiModels,
+	"openai-native": openAiNativeModels,
+	deepseek: deepSeekModels,
+	mistral: mistralModels,
+}
+
+const providers = [
+	{ value: "openrouter", label: "OpenRouter" },
+	{ value: "anthropic", label: "Anthropic" },
+	{ value: "gemini", label: "Google Gemini" },
+	{ value: "deepseek", label: "DeepSeek" },
+	{ value: "openai-native", label: "OpenAI" },
+	{ value: "openai", label: "OpenAI Compatible" },
+	{ value: "vertex", label: "GCP Vertex AI" },
+	{ value: "bedrock", label: "AWS Bedrock" },
+	{ value: "glama", label: "Glama" },
+	{ value: "vscode-lm", label: "VS Code LM API" },
+	{ value: "mistral", label: "Mistral" },
+	{ value: "lmstudio", label: "LM Studio" },
+	{ value: "ollama", label: "Ollama" },
+	{ value: "unbound", label: "Unbound" },
+	{ value: "requesty", label: "Requesty" },
+	{ value: "human-relay", label: "Human Relay" },
+]
+
+interface ApiOptionsProps {
 	uriScheme: string | undefined
-	apiConfiguration: ProviderSettings
-	setApiConfigurationField: <K extends keyof ProviderSettings>(
-		field: K,
-		value: ProviderSettings[K],
-		isUserAction?: boolean,
-	) => void
+	apiConfiguration: ApiConfiguration
+	setApiConfigurationField: <K extends keyof ApiConfiguration>(field: K, value: ApiConfiguration[K]) => void
 	fromWelcomeView?: boolean
 	errorMessage: string | undefined
 	setErrorMessage: React.Dispatch<React.SetStateAction<string | undefined>>
@@ -142,47 +91,45 @@ const ApiOptions = ({
 	errorMessage,
 	setErrorMessage,
 }: ApiOptionsProps) => {
-	const { t } = useAppTranslation()
-	const { organizationAllowList, cloudIsAuthenticated } = useExtensionState()
+	const [ollamaModels, setOllamaModels] = useState<string[]>([])
+	const [lmStudioModels, setLmStudioModels] = useState<string[]>([])
+	const [vsCodeLmModels, setVsCodeLmModels] = useState<vscodemodels.LanguageModelChatSelector[]>([])
 
-	const [customHeaders, setCustomHeaders] = useState<[string, string][]>(() => {
-		const headers = apiConfiguration?.openAiHeaders || {}
-		return Object.entries(headers)
+	const [openRouterModels, setOpenRouterModels] = useState<Record<string, ModelInfo>>({
+		[openRouterDefaultModelId]: openRouterDefaultModelInfo,
 	})
 
-	useEffect(() => {
-		const propHeaders = apiConfiguration?.openAiHeaders || {}
+	const [glamaModels, setGlamaModels] = useState<Record<string, ModelInfo>>({
+		[glamaDefaultModelId]: glamaDefaultModelInfo,
+	})
 
-		if (JSON.stringify(customHeaders) !== JSON.stringify(Object.entries(propHeaders))) {
-			setCustomHeaders(Object.entries(propHeaders))
-		}
-	}, [apiConfiguration?.openAiHeaders, customHeaders])
+	const [unboundModels, setUnboundModels] = useState<Record<string, ModelInfo>>({
+		[unboundDefaultModelId]: unboundDefaultModelInfo,
+	})
 
-	// Helper to convert array of tuples to object (filtering out empty keys).
+	const [requestyModels, setRequestyModels] = useState<Record<string, ModelInfo>>({
+		[requestyDefaultModelId]: requestyDefaultModelInfo,
+	})
 
-	// Debounced effect to update the main configuration when local
-	// customHeaders state stabilizes.
-	useDebounce(
-		() => {
-			const currentConfigHeaders = apiConfiguration?.openAiHeaders || {}
-			const newHeadersObject = convertHeadersToObject(customHeaders)
+	const [openAiModels, setOpenAiModels] = useState<Record<string, ModelInfo> | null>(null)
 
-			// Only update if the processed object is different from the current config.
-			if (JSON.stringify(currentConfigHeaders) !== JSON.stringify(newHeadersObject)) {
-				setApiConfigurationField("openAiHeaders", newHeadersObject)
-			}
-		},
-		300,
-		[customHeaders, apiConfiguration?.openAiHeaders, setApiConfigurationField],
+	const [anthropicBaseUrlSelected, setAnthropicBaseUrlSelected] = useState(!!apiConfiguration?.anthropicBaseUrl)
+	const [azureApiVersionSelected, setAzureApiVersionSelected] = useState(!!apiConfiguration?.azureApiVersion)
+	const [openRouterBaseUrlSelected, setOpenRouterBaseUrlSelected] = useState(!!apiConfiguration?.openRouterBaseUrl)
+	const [googleGeminiBaseUrlSelected, setGoogleGeminiBaseUrlSelected] = useState(
+		!!apiConfiguration?.googleGeminiBaseUrl,
 	)
-
 	const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false)
-	const [isAdvancedSettingsOpen, setIsAdvancedSettingsOpen] = useState(false)
+
+	const noTransform = <T,>(value: T) => value
+	const inputEventTransform = <E,>(event: E) => (event as { target: HTMLInputElement })?.target?.value as any
+	const dropdownEventTransform = <T,>(event: DropdownOption | string | undefined) =>
+		(typeof event == "string" ? event : event?.value) as T
 
 	const handleInputChange = useCallback(
-		<K extends keyof ProviderSettings, E>(
+		<K extends keyof ApiConfiguration, E>(
 			field: K,
-			transform: (event: E) => ProviderSettings[K] = inputEventTransform,
+			transform: (event: E) => ApiConfiguration[K] = inputEventTransform,
 		) =>
 			(event: E | Event) => {
 				setApiConfigurationField(field, transform(event as E))
@@ -190,64 +137,37 @@ const ApiOptions = ({
 		[setApiConfigurationField],
 	)
 
-	const {
-		provider: selectedProvider,
-		id: selectedModelId,
-		info: selectedModelInfo,
-	} = useSelectedModel(apiConfiguration)
-
-	const { data: routerModels, refetch: refetchRouterModels } = useRouterModels()
-
-	const { data: openRouterModelProviders } = useOpenRouterModelProviders(
-		apiConfiguration?.openRouterModelId,
-		apiConfiguration?.openRouterBaseUrl,
-		{
-			enabled:
-				!!apiConfiguration?.openRouterModelId &&
-				routerModels?.openrouter &&
-				Object.keys(routerModels.openrouter).length > 1 &&
-				apiConfiguration.openRouterModelId in routerModels.openrouter,
-		},
+	const { selectedProvider, selectedModelId, selectedModelInfo } = useMemo(
+		() => normalizeApiConfiguration(apiConfiguration),
+		[apiConfiguration],
 	)
-
-	// Update `apiModelId` whenever `selectedModelId` changes.
-	useEffect(() => {
-		if (selectedModelId && apiConfiguration.apiModelId !== selectedModelId) {
-			// Pass false as third parameter to indicate this is not a user action
-			// This is an internal sync, not a user-initiated change
-			setApiConfigurationField("apiModelId", selectedModelId, false)
-		}
-	}, [selectedModelId, setApiConfigurationField, apiConfiguration.apiModelId])
 
 	// Debounced refresh model updates, only executed 250ms after the user
 	// stops typing.
 	useDebounce(
 		() => {
-			if (selectedProvider === "openai") {
-				// Use our custom headers state to build the headers object.
-				const headerObject = convertHeadersToObject(customHeaders)
-
+			if (selectedProvider === "openrouter") {
+				vscode.postMessage({ type: "refreshOpenRouterModels" })
+			} else if (selectedProvider === "glama") {
+				vscode.postMessage({ type: "refreshGlamaModels" })
+			} else if (selectedProvider === "unbound") {
+				vscode.postMessage({ type: "refreshUnboundModels" })
+			} else if (selectedProvider === "requesty") {
 				vscode.postMessage({
-					type: "requestOpenAiModels",
-					values: {
-						baseUrl: apiConfiguration?.openAiBaseUrl,
-						apiKey: apiConfiguration?.openAiApiKey,
-						customHeaders: {}, // Reserved for any additional headers.
-						openAiHeaders: headerObject,
-					},
+					type: "refreshRequestyModels",
+					values: { apiKey: apiConfiguration?.requestyApiKey },
+				})
+			} else if (selectedProvider === "openai") {
+				vscode.postMessage({
+					type: "refreshOpenAiModels",
+					values: { baseUrl: apiConfiguration?.openAiBaseUrl, apiKey: apiConfiguration?.openAiApiKey },
 				})
 			} else if (selectedProvider === "ollama") {
-				vscode.postMessage({ type: "requestOllamaModels" })
+				vscode.postMessage({ type: "requestOllamaModels", text: apiConfiguration?.ollamaBaseUrl })
 			} else if (selectedProvider === "lmstudio") {
-				vscode.postMessage({ type: "requestLmStudioModels" })
+				vscode.postMessage({ type: "requestLmStudioModels", text: apiConfiguration?.lmStudioBaseUrl })
 			} else if (selectedProvider === "vscode-lm") {
 				vscode.postMessage({ type: "requestVsCodeLmModels" })
-			} else if (
-				selectedProvider === "litellm" ||
-				selectedProvider === "deepinfra" ||
-				selectedProvider === "roo"
-			) {
-				vscode.postMessage({ type: "requestRouterModels" })
 			}
 		},
 		250,
@@ -258,745 +178,1444 @@ const ApiOptions = ({
 			apiConfiguration?.openAiApiKey,
 			apiConfiguration?.ollamaBaseUrl,
 			apiConfiguration?.lmStudioBaseUrl,
-			apiConfiguration?.litellmBaseUrl,
-			apiConfiguration?.litellmApiKey,
-			apiConfiguration?.deepInfraApiKey,
-			apiConfiguration?.deepInfraBaseUrl,
-			customHeaders,
 		],
 	)
 
 	useEffect(() => {
-		const apiValidationResult = validateApiConfigurationExcludingModelErrors(
-			apiConfiguration,
-			routerModels,
-			organizationAllowList,
-		)
+		const apiValidationResult =
+			validateApiConfiguration(apiConfiguration) ||
+			validateModelId(apiConfiguration, glamaModels, openRouterModels, unboundModels, requestyModels)
+
 		setErrorMessage(apiValidationResult)
-	}, [apiConfiguration, routerModels, organizationAllowList, setErrorMessage])
+	}, [apiConfiguration, glamaModels, openRouterModels, setErrorMessage, unboundModels, requestyModels])
 
-	const selectedProviderModels = useMemo(() => {
-		const models = MODELS_BY_PROVIDER[selectedProvider]
+	const onMessage = useCallback((event: MessageEvent) => {
+		const message: ExtensionMessage = event.data
 
-		if (!models) return []
-
-		const filteredModels = filterModels(models, selectedProvider, organizationAllowList)
-
-		// Include the currently selected model even if deprecated (so users can see what they have selected)
-		// But filter out other deprecated models from being newly selectable
-		const availableModels = filteredModels
-			? Object.entries(filteredModels)
-					.filter(([modelId, modelInfo]) => {
-						// Always include the currently selected model
-						if (modelId === selectedModelId) return true
-						// Filter out deprecated models that aren't currently selected
-						return !modelInfo.deprecated
-					})
-					.map(([modelId]) => ({
-						value: modelId,
-						label: modelId,
-					}))
-			: []
-
-		return availableModels
-	}, [selectedProvider, organizationAllowList, selectedModelId])
-
-	const onProviderChange = useCallback(
-		(value: ProviderName) => {
-			setApiConfigurationField("apiProvider", value)
-
-			// It would be much easier to have a single attribute that stores
-			// the modelId, but we have a separate attribute for each of
-			// OpenRouter, Glama, Unbound, and Requesty.
-			// If you switch to one of these providers and the corresponding
-			// modelId is not set then you immediately end up in an error state.
-			// To address that we set the modelId to the default value for th
-			// provider if it's not already set.
-			const validateAndResetModel = (
-				modelId: string | undefined,
-				field: keyof ProviderSettings,
-				defaultValue?: string,
-			) => {
-				// in case we haven't set a default value for a provider
-				if (!defaultValue) return
-
-				// only set default if no model is set, but don't reset invalid models
-				// let users see and decide what to do with invalid model selections
-				const shouldSetDefault = !modelId
-
-				if (shouldSetDefault) {
-					setApiConfigurationField(field, defaultValue, false)
+		switch (message.type) {
+			case "openRouterModels": {
+				const updatedModels = message.openRouterModels ?? {}
+				setOpenRouterModels({ [openRouterDefaultModelId]: openRouterDefaultModelInfo, ...updatedModels })
+				break
+			}
+			case "glamaModels": {
+				const updatedModels = message.glamaModels ?? {}
+				setGlamaModels({ [glamaDefaultModelId]: glamaDefaultModelInfo, ...updatedModels })
+				break
+			}
+			case "unboundModels": {
+				const updatedModels = message.unboundModels ?? {}
+				setUnboundModels({ [unboundDefaultModelId]: unboundDefaultModelInfo, ...updatedModels })
+				break
+			}
+			case "requestyModels": {
+				const updatedModels = message.requestyModels ?? {}
+				setRequestyModels({ [requestyDefaultModelId]: requestyDefaultModelInfo, ...updatedModels })
+				break
+			}
+			case "openAiModels": {
+				const updatedModels = message.openAiModels ?? []
+				setOpenAiModels(Object.fromEntries(updatedModels.map((item) => [item, openAiModelInfoSaneDefaults])))
+				break
+			}
+			case "ollamaModels":
+				{
+					const newModels = message.ollamaModels ?? []
+					setOllamaModels(newModels)
 				}
-			}
+				break
+			case "lmStudioModels":
+				{
+					const newModels = message.lmStudioModels ?? []
+					setLmStudioModels(newModels)
+				}
+				break
+			case "vsCodeLmModels":
+				{
+					const newModels = message.vsCodeLmModels ?? []
+					setVsCodeLmModels(newModels)
+				}
+				break
+		}
+	}, [])
 
-			// Define a mapping object that associates each provider with its model configuration
-			const PROVIDER_MODEL_CONFIG: Partial<
-				Record<
-					ProviderName,
-					{
-						field: keyof ProviderSettings
-						default?: string
-					}
-				>
-			> = {
-				deepinfra: { field: "deepInfraModelId", default: deepInfraDefaultModelId },
-				openrouter: { field: "openRouterModelId", default: openRouterDefaultModelId },
-				glama: { field: "glamaModelId", default: glamaDefaultModelId },
-				unbound: { field: "unboundModelId", default: unboundDefaultModelId },
-				requesty: { field: "requestyModelId", default: requestyDefaultModelId },
-				litellm: { field: "litellmModelId", default: litellmDefaultModelId },
-				anthropic: { field: "apiModelId", default: anthropicDefaultModelId },
-				cerebras: { field: "apiModelId", default: cerebrasDefaultModelId },
-				"claude-code": { field: "apiModelId", default: claudeCodeDefaultModelId },
-				"qwen-code": { field: "apiModelId", default: qwenCodeDefaultModelId },
-				"openai-native": { field: "apiModelId", default: openAiNativeDefaultModelId },
-				gemini: { field: "apiModelId", default: geminiDefaultModelId },
-				deepseek: { field: "apiModelId", default: deepSeekDefaultModelId },
-				doubao: { field: "apiModelId", default: doubaoDefaultModelId },
-				moonshot: { field: "apiModelId", default: moonshotDefaultModelId },
-				minimax: { field: "apiModelId", default: minimaxDefaultModelId },
-				mistral: { field: "apiModelId", default: mistralDefaultModelId },
-				xai: { field: "apiModelId", default: xaiDefaultModelId },
-				groq: { field: "apiModelId", default: groqDefaultModelId },
-				chutes: { field: "apiModelId", default: chutesDefaultModelId },
-				baseten: { field: "apiModelId", default: basetenDefaultModelId },
-				bedrock: { field: "apiModelId", default: bedrockDefaultModelId },
-				vertex: { field: "apiModelId", default: vertexDefaultModelId },
-				sambanova: { field: "apiModelId", default: sambaNovaDefaultModelId },
-				zai: {
-					field: "apiModelId",
-					default:
-						apiConfiguration.zaiApiLine === "china_coding"
-							? mainlandZAiDefaultModelId
-							: internationalZAiDefaultModelId,
-				},
-				fireworks: { field: "apiModelId", default: fireworksDefaultModelId },
-				featherless: { field: "apiModelId", default: featherlessDefaultModelId },
-				"io-intelligence": { field: "ioIntelligenceModelId", default: ioIntelligenceDefaultModelId },
-				roo: { field: "apiModelId", default: rooDefaultModelId },
-				"vercel-ai-gateway": { field: "vercelAiGatewayModelId", default: vercelAiGatewayDefaultModelId },
-				openai: { field: "openAiModelId" },
-				ollama: { field: "ollamaModelId" },
-				lmstudio: { field: "lmStudioModelId" },
-			}
+	useEvent("message", onMessage)
 
-			const config = PROVIDER_MODEL_CONFIG[value]
-			if (config) {
-				validateAndResetModel(
-					apiConfiguration[config.field] as string | undefined,
-					config.field,
-					config.default,
-				)
-			}
-		},
-		[setApiConfigurationField, apiConfiguration],
+	const selectedProviderModelOptions: DropdownOption[] = useMemo(
+		() =>
+			modelsByProvider[selectedProvider]
+				? [
+						{ value: "", label: "Select a model..." },
+						...Object.keys(modelsByProvider[selectedProvider]).map((modelId) => ({
+							value: modelId,
+							label: modelId,
+						})),
+					]
+				: [],
+		[selectedProvider],
 	)
-
-	const modelValidationError = useMemo(() => {
-		return getModelValidationError(apiConfiguration, routerModels, organizationAllowList)
-	}, [apiConfiguration, routerModels, organizationAllowList])
-
-	const docs = useMemo(() => {
-		const provider = PROVIDERS.find(({ value }) => value === selectedProvider)
-		const name = provider?.label
-
-		if (!name) {
-			return undefined
-		}
-
-		// Get the URL slug - use custom mapping if available, otherwise use the provider key.
-		const slugs: Record<string, string> = {
-			"openai-native": "openai",
-			openai: "openai-compatible",
-		}
-
-		const slug = slugs[selectedProvider] || selectedProvider
-		return {
-			url: buildDocLink(`providers/${slug}`, "provider_docs"),
-			name,
-		}
-	}, [selectedProvider])
-
-	// Calculate the default protocol that would be used if toolProtocol is not set
-	// Mirrors the simplified logic in resolveToolProtocol.ts:
-	// 1. User preference (toolProtocol) - handled by the select value binding
-	// 2. Model default - use if available
-	// 3. XML fallback
-	const defaultProtocol = selectedModelInfo?.defaultToolProtocol || TOOL_PROTOCOL.XML
-
-	// Show the tool protocol selector when model supports native tools
-	const showToolProtocolSelector = selectedModelInfo?.supportsNativeTools === true
-
-	// Convert providers to SearchableSelect options
-	const providerOptions = useMemo(() => {
-		// First filter by organization allow list
-		const allowedProviders = filterProviders(PROVIDERS, organizationAllowList)
-
-		// Then filter out static providers that have no models (unless currently selected)
-		const providersWithModels = allowedProviders.filter(({ value }) => {
-			// Always show the currently selected provider to avoid breaking existing configurations
-			// Use apiConfiguration.apiProvider directly since that's what's actually selected
-			if (value === apiConfiguration.apiProvider) {
-				return true
-			}
-
-			// Check if this is a static provider (has models in MODELS_BY_PROVIDER)
-			const staticModels = MODELS_BY_PROVIDER[value as ProviderName]
-
-			// If it's a static provider, check if it has any models after filtering
-			if (staticModels) {
-				const filteredModels = filterModels(staticModels, value as ProviderName, organizationAllowList)
-				// Hide the provider if it has no models after filtering
-				return filteredModels && Object.keys(filteredModels).length > 0
-			}
-
-			// If it's a dynamic provider (not in MODELS_BY_PROVIDER), always show it
-			// to avoid race conditions with async model fetching
-			return true
-		})
-
-		const options = providersWithModels.map(({ value, label }) => ({
-			value,
-			label,
-		}))
-
-		// Pin "roo" to the top if not on welcome screen
-		if (!fromWelcomeView) {
-			const rooIndex = options.findIndex((opt) => opt.value === "roo")
-			if (rooIndex > 0) {
-				const [rooOption] = options.splice(rooIndex, 1)
-				options.unshift(rooOption)
-			}
-		} else {
-			const openRouterIndex = options.findIndex((opt) => opt.value === "openrouter")
-			if (openRouterIndex > 0) {
-				const [openRouterOption] = options.splice(openRouterIndex, 1)
-				options.unshift(openRouterOption)
-			}
-		}
-
-		return options
-	}, [organizationAllowList, apiConfiguration.apiProvider, fromWelcomeView])
 
 	return (
 		<div className="flex flex-col gap-3">
-			<div className="flex flex-col gap-1 relative">
-				<div className="flex justify-between items-center">
-					<label className="block font-medium">{t("settings:providers.apiProvider")}</label>
-					{selectedProvider === "roo" && cloudIsAuthenticated ? (
-						<RooBalanceDisplay />
-					) : (
-						docs && (
-							<VSCodeLink href={docs.url} target="_blank" className="flex gap-2">
-								{docs.name}
-								<BookOpenText className="size-4 inline ml-2" />
-							</VSCodeLink>
-						)
-					)}
-				</div>
-				<SearchableSelect
+			<div className="dropdown-container">
+				<label htmlFor="api-provider" className="font-medium">
+					API Provider
+				</label>
+				<Select
 					value={selectedProvider}
-					onValueChange={(value) => onProviderChange(value as ProviderName)}
-					options={providerOptions}
-					placeholder={t("settings:common.select")}
-					searchPlaceholder={t("settings:providers.searchProviderPlaceholder")}
-					emptyMessage={t("settings:providers.noProviderMatchFound")}
-					className="w-full"
-					data-testid="provider-select"
-				/>
+					onValueChange={handleInputChange("apiProvider", dropdownEventTransform)}>
+					<SelectTrigger className="w-full">
+						<SelectValue placeholder="Select" />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectGroup>
+							{providers.map(({ value, label }) => (
+								<SelectItem key={value} value={value}>
+									{label}
+								</SelectItem>
+							))}
+						</SelectGroup>
+					</SelectContent>
+				</Select>
 			</div>
 
 			{errorMessage && <ApiErrorMessage errorMessage={errorMessage} />}
 
 			{selectedProvider === "openrouter" && (
-				<OpenRouter
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					routerModels={routerModels}
-					selectedModelId={selectedModelId}
-					uriScheme={uriScheme}
-					simplifySettings={fromWelcomeView}
-					organizationAllowList={organizationAllowList}
-					modelValidationError={modelValidationError}
-				/>
-			)}
+				<>
+					<VSCodeTextField
+						value={apiConfiguration?.openRouterApiKey || ""}
+						type="password"
+						onInput={handleInputChange("openRouterApiKey")}
+						placeholder="Enter API Key..."
+						className="w-full">
+						<span className="font-medium">OpenRouter API Key</span>
+					</VSCodeTextField>
+					<div className="text-sm text-vscode-descriptionForeground -mt-2">
+						This key is stored locally and only used to make API requests from this extension.
+					</div>
+					{!apiConfiguration?.openRouterApiKey && (
+						<VSCodeButtonLink href={getOpenRouterAuthUrl(uriScheme)} appearance="secondary">
+							Get OpenRouter API Key
+						</VSCodeButtonLink>
+					)}
+					{!fromWelcomeView && (
+						<>
+							<div>
+								<Checkbox
+									checked={openRouterBaseUrlSelected}
+									onChange={(checked: boolean) => {
+										setOpenRouterBaseUrlSelected(checked)
 
-			{selectedProvider === "requesty" && (
-				<Requesty
-					uriScheme={uriScheme}
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					routerModels={routerModels}
-					refetchRouterModels={refetchRouterModels}
-					organizationAllowList={organizationAllowList}
-					modelValidationError={modelValidationError}
-					simplifySettings={fromWelcomeView}
-				/>
-			)}
-
-			{selectedProvider === "glama" && (
-				<Glama
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					routerModels={routerModels}
-					uriScheme={uriScheme}
-					organizationAllowList={organizationAllowList}
-					modelValidationError={modelValidationError}
-					simplifySettings={fromWelcomeView}
-				/>
-			)}
-
-			{selectedProvider === "unbound" && (
-				<Unbound
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					routerModels={routerModels}
-					organizationAllowList={organizationAllowList}
-					modelValidationError={modelValidationError}
-					simplifySettings={fromWelcomeView}
-				/>
-			)}
-
-			{selectedProvider === "deepinfra" && (
-				<DeepInfra
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					routerModels={routerModels}
-					refetchRouterModels={refetchRouterModels}
-					organizationAllowList={organizationAllowList}
-					modelValidationError={modelValidationError}
-					simplifySettings={fromWelcomeView}
-				/>
+										if (!checked) {
+											setApiConfigurationField("openRouterBaseUrl", "")
+										}
+									}}>
+									Use custom base URL
+								</Checkbox>
+								{openRouterBaseUrlSelected && (
+									<VSCodeTextField
+										value={apiConfiguration?.openRouterBaseUrl || ""}
+										type="url"
+										onInput={handleInputChange("openRouterBaseUrl")}
+										placeholder="Default: https://openrouter.ai/api/v1"
+										className="w-full mt-1"
+									/>
+								)}
+							</div>
+							<Checkbox
+								checked={apiConfiguration?.openRouterUseMiddleOutTransform ?? true}
+								onChange={handleInputChange("openRouterUseMiddleOutTransform", noTransform)}>
+								Compress prompts and message chains to the context size (
+								<a href="https://openrouter.ai/docs/transforms">OpenRouter Transforms</a>)
+							</Checkbox>
+						</>
+					)}
+				</>
 			)}
 
 			{selectedProvider === "anthropic" && (
-				<Anthropic
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					simplifySettings={fromWelcomeView}
-				/>
+				<>
+					<VSCodeTextField
+						value={apiConfiguration?.apiKey || ""}
+						type="password"
+						onInput={handleInputChange("apiKey")}
+						placeholder="Enter API Key..."
+						className="w-full">
+						<div className="font-medium">Anthropic API Key</div>
+					</VSCodeTextField>
+					<div className="text-sm text-vscode-descriptionForeground -mt-2">
+						This key is stored locally and only used to make API requests from this extension.
+					</div>
+					{!apiConfiguration?.apiKey && (
+						<VSCodeButtonLink href="https://console.anthropic.com/settings/keys" appearance="secondary">
+							Get Anthropic API Key
+						</VSCodeButtonLink>
+					)}
+					<div>
+						<Checkbox
+							checked={anthropicBaseUrlSelected}
+							onChange={(checked: boolean) => {
+								setAnthropicBaseUrlSelected(checked)
+
+								if (!checked) {
+									setApiConfigurationField("anthropicBaseUrl", "")
+								}
+							}}>
+							Use custom base URL
+						</Checkbox>
+						{anthropicBaseUrlSelected && (
+							<VSCodeTextField
+								value={apiConfiguration?.anthropicBaseUrl || ""}
+								type="url"
+								onInput={handleInputChange("anthropicBaseUrl")}
+								placeholder="https://api.anthropic.com"
+								className="w-full mt-1"
+							/>
+						)}
+					</div>
+				</>
 			)}
 
-			{selectedProvider === "claude-code" && (
-				<ClaudeCode
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					simplifySettings={fromWelcomeView}
-				/>
+			{selectedProvider === "glama" && (
+				<>
+					<VSCodeTextField
+						value={apiConfiguration?.glamaApiKey || ""}
+						type="password"
+						onInput={handleInputChange("glamaApiKey")}
+						placeholder="Enter API Key..."
+						className="w-full">
+						<span className="font-medium">Glama API Key</span>
+					</VSCodeTextField>
+					<div className="text-sm text-vscode-descriptionForeground -mt-2">
+						This key is stored locally and only used to make API requests from this extension.
+					</div>
+					{!apiConfiguration?.glamaApiKey && (
+						<VSCodeButtonLink href={getGlamaAuthUrl(uriScheme)} appearance="secondary">
+							Get Glama API Key
+						</VSCodeButtonLink>
+					)}
+				</>
+			)}
+
+			{selectedProvider === "requesty" && (
+				<>
+					<VSCodeTextField
+						value={apiConfiguration?.requestyApiKey || ""}
+						type="password"
+						onInput={handleInputChange("requestyApiKey")}
+						placeholder="Enter API Key..."
+						className="w-full">
+						<span className="font-medium">Requesty API Key</span>
+					</VSCodeTextField>
+					<div className="text-sm text-vscode-descriptionForeground -mt-2">
+						This key is stored locally and only used to make API requests from this extension.
+					</div>
+				</>
 			)}
 
 			{selectedProvider === "openai-native" && (
-				<OpenAI
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					selectedModelInfo={selectedModelInfo}
-					simplifySettings={fromWelcomeView}
-				/>
+				<>
+					<VSCodeTextField
+						value={apiConfiguration?.openAiNativeApiKey || ""}
+						type="password"
+						onInput={handleInputChange("openAiNativeApiKey")}
+						placeholder="Enter API Key..."
+						className="w-full">
+						<span className="font-medium">OpenAI API Key</span>
+					</VSCodeTextField>
+					<div className="text-sm text-vscode-descriptionForeground -mt-2">
+						This key is stored locally and only used to make API requests from this extension.
+					</div>
+					{!apiConfiguration?.openAiNativeApiKey && (
+						<VSCodeButtonLink href="https://platform.openai.com/api-keys" appearance="secondary">
+							Get OpenAI API Key
+						</VSCodeButtonLink>
+					)}
+				</>
 			)}
 
 			{selectedProvider === "mistral" && (
-				<Mistral
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					simplifySettings={fromWelcomeView}
-				/>
-			)}
-
-			{selectedProvider === "baseten" && (
-				<Baseten
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					simplifySettings={fromWelcomeView}
-				/>
+				<>
+					<VSCodeTextField
+						value={apiConfiguration?.mistralApiKey || ""}
+						type="password"
+						onInput={handleInputChange("mistralApiKey")}
+						placeholder="Enter API Key..."
+						className="w-full">
+						<span className="font-medium">Mistral API Key</span>
+					</VSCodeTextField>
+					<div className="text-sm text-vscode-descriptionForeground -mt-2">
+						This key is stored locally and only used to make API requests from this extension.
+					</div>
+					{!apiConfiguration?.mistralApiKey && (
+						<VSCodeButtonLink href="https://console.mistral.ai/" appearance="secondary">
+							Get Mistral / Codestral API Key
+						</VSCodeButtonLink>
+					)}
+					{(apiConfiguration?.apiModelId?.startsWith("codestral-") ||
+						(!apiConfiguration?.apiModelId && mistralDefaultModelId.startsWith("codestral-"))) && (
+						<>
+							<VSCodeTextField
+								value={apiConfiguration?.mistralCodestralUrl || ""}
+								type="url"
+								onInput={handleInputChange("mistralCodestralUrl")}
+								placeholder="https://codestral.mistral.ai"
+								className="w-full">
+								<span className="font-medium">Codestral Base URL (Optional)</span>
+							</VSCodeTextField>
+							<div className="text-sm text-vscode-descriptionForeground -mt-2">
+								Set an alternative URL for the Codestral model.
+							</div>
+						</>
+					)}
+				</>
 			)}
 
 			{selectedProvider === "bedrock" && (
-				<Bedrock
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					selectedModelInfo={selectedModelInfo}
-					simplifySettings={fromWelcomeView}
-				/>
+				<>
+					<VSCodeRadioGroup
+						value={apiConfiguration?.awsUseProfile ? "profile" : "credentials"}
+						onChange={handleInputChange(
+							"awsUseProfile",
+							(e) => (e.target as HTMLInputElement).value === "profile",
+						)}>
+						<VSCodeRadio value="credentials">AWS Credentials</VSCodeRadio>
+						<VSCodeRadio value="profile">AWS Profile</VSCodeRadio>
+					</VSCodeRadioGroup>
+					<div className="text-sm text-vscode-descriptionForeground -mt-3">
+						Authenticate by providing an access key and secret or use the default AWS credential providers,
+						i.e. ~/.aws/credentials or environment variables. These credentials are only used locally to
+						make API requests from this extension.
+					</div>
+					{apiConfiguration?.awsUseProfile ? (
+						<VSCodeTextField
+							value={apiConfiguration?.awsProfile || ""}
+							onInput={handleInputChange("awsProfile")}
+							placeholder="Enter profile name"
+							className="w-full">
+							<span className="font-medium">AWS Profile Name</span>
+						</VSCodeTextField>
+					) : (
+						<>
+							<VSCodeTextField
+								value={apiConfiguration?.awsAccessKey || ""}
+								type="password"
+								onInput={handleInputChange("awsAccessKey")}
+								placeholder="Enter Access Key..."
+								className="w-full">
+								<span className="font-medium">AWS Access Key</span>
+							</VSCodeTextField>
+							<VSCodeTextField
+								value={apiConfiguration?.awsSecretKey || ""}
+								type="password"
+								onInput={handleInputChange("awsSecretKey")}
+								placeholder="Enter Secret Key..."
+								className="w-full">
+								<span className="font-medium">AWS Secret Key</span>
+							</VSCodeTextField>
+							<VSCodeTextField
+								value={apiConfiguration?.awsSessionToken || ""}
+								type="password"
+								onInput={handleInputChange("awsSessionToken")}
+								placeholder="Enter Session Token..."
+								className="w-full">
+								<span className="font-medium">AWS Session Token</span>
+							</VSCodeTextField>
+						</>
+					)}
+					<div className="dropdown-container">
+						<label htmlFor="aws-region-dropdown" className="font-medium">
+							AWS Region
+						</label>
+						<Dropdown
+							id="aws-region-dropdown"
+							value={apiConfiguration?.awsRegion || ""}
+							onChange={handleInputChange("awsRegion", dropdownEventTransform)}
+							options={[
+								{ value: "", label: "Select a region..." },
+								{ value: "us-east-1", label: "us-east-1" },
+								{ value: "us-east-2", label: "us-east-2" },
+								{ value: "us-west-2", label: "us-west-2" },
+								{ value: "ap-south-1", label: "ap-south-1" },
+								{ value: "ap-northeast-1", label: "ap-northeast-1" },
+								{ value: "ap-northeast-2", label: "ap-northeast-2" },
+								{ value: "ap-southeast-1", label: "ap-southeast-1" },
+								{ value: "ap-southeast-2", label: "ap-southeast-2" },
+								{ value: "ca-central-1", label: "ca-central-1" },
+								{ value: "eu-central-1", label: "eu-central-1" },
+								{ value: "eu-west-1", label: "eu-west-1" },
+								{ value: "eu-west-2", label: "eu-west-2" },
+								{ value: "eu-west-3", label: "eu-west-3" },
+								{ value: "sa-east-1", label: "sa-east-1" },
+								{ value: "us-gov-west-1", label: "us-gov-west-1" },
+							]}
+							className="w-full"
+						/>
+					</div>
+					<Checkbox
+						checked={apiConfiguration?.awsUseCrossRegionInference || false}
+						onChange={handleInputChange("awsUseCrossRegionInference", noTransform)}>
+						Use cross-region inference
+					</Checkbox>
+				</>
 			)}
 
 			{selectedProvider === "vertex" && (
-				<Vertex
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					simplifySettings={fromWelcomeView}
-				/>
+				<>
+					<div className="text-sm text-vscode-descriptionForeground">
+						<div>To use Google Cloud Vertex AI, you need to:</div>
+						<div>
+							<VSCodeLink
+								href="https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#before_you_begin"
+								className="text-sm">
+								1. Create a Google Cloud account, enable the Vertex AI API & enable the desired Claude
+								models.
+							</VSCodeLink>
+						</div>
+						<div>
+							<VSCodeLink
+								href="https://cloud.google.com/docs/authentication/provide-credentials-adc#google-idp"
+								className="text-sm">
+								2. Install the Google Cloud CLI & configure application default credentials.
+							</VSCodeLink>
+						</div>
+						<div>
+							<VSCodeLink
+								href="https://developers.google.com/workspace/guides/create-credentials?hl=en#service-account"
+								className="text-sm">
+								3. Or create a service account with credentials.
+							</VSCodeLink>
+						</div>
+					</div>
+					<VSCodeTextField
+						value={apiConfiguration?.vertexJsonCredentials || ""}
+						onInput={handleInputChange("vertexJsonCredentials")}
+						placeholder="Enter Credentials JSON..."
+						className="w-full">
+						<span className="font-medium">Google Cloud Credentials</span>
+					</VSCodeTextField>
+					<VSCodeTextField
+						value={apiConfiguration?.vertexKeyFile || ""}
+						onInput={handleInputChange("vertexKeyFile")}
+						placeholder="Enter Key File Path..."
+						className="w-full">
+						<span className="font-medium">Google Cloud Key File Path</span>
+					</VSCodeTextField>
+					<VSCodeTextField
+						value={apiConfiguration?.vertexProjectId || ""}
+						onInput={handleInputChange("vertexProjectId")}
+						placeholder="Enter Project ID..."
+						className="w-full">
+						<span className="font-medium">Google Cloud Project ID</span>
+					</VSCodeTextField>
+					<div className="dropdown-container">
+						<label htmlFor="vertex-region-dropdown" className="font-medium">
+							Google Cloud Region
+						</label>
+						<Dropdown
+							id="vertex-region-dropdown"
+							value={apiConfiguration?.vertexRegion || ""}
+							onChange={handleInputChange("vertexRegion", dropdownEventTransform)}
+							options={[
+								{ value: "", label: "Select a region..." },
+								{ value: "us-east5", label: "us-east5" },
+								{ value: "us-central1", label: "us-central1" },
+								{ value: "europe-west1", label: "europe-west1" },
+								{ value: "europe-west4", label: "europe-west4" },
+								{ value: "asia-southeast1", label: "asia-southeast1" },
+							]}
+							className="w-full"
+						/>
+					</div>
+				</>
 			)}
 
 			{selectedProvider === "gemini" && (
-				<Gemini
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					simplifySettings={fromWelcomeView}
-				/>
+				<>
+					<VSCodeTextField
+						value={apiConfiguration?.geminiApiKey || ""}
+						type="password"
+						onInput={handleInputChange("geminiApiKey")}
+						placeholder="Enter API Key..."
+						className="w-full">
+						<span className="font-medium">Gemini API Key</span>
+					</VSCodeTextField>
+					<div className="text-sm text-vscode-descriptionForeground -mt-2">
+						This key is stored locally and only used to make API requests from this extension.
+					</div>
+					{!apiConfiguration?.geminiApiKey && (
+						<VSCodeButtonLink href="https://ai.google.dev/" appearance="secondary">
+							Get Gemini API Key
+						</VSCodeButtonLink>
+					)}
+					<div>
+						<Checkbox
+							checked={googleGeminiBaseUrlSelected}
+							onChange={(checked: boolean) => {
+								setGoogleGeminiBaseUrlSelected(checked)
+
+								if (!checked) {
+									setApiConfigurationField("googleGeminiBaseUrl", "")
+								}
+							}}>
+							Use custom base URL
+						</Checkbox>
+						{googleGeminiBaseUrlSelected && (
+							<VSCodeTextField
+								value={apiConfiguration?.googleGeminiBaseUrl || ""}
+								type="url"
+								onInput={handleInputChange("googleGeminiBaseUrl")}
+								placeholder="https://generativelanguage.googleapis.com"
+								className="w-full mt-1"
+							/>
+						)}
+					</div>
+				</>
 			)}
 
 			{selectedProvider === "openai" && (
-				<OpenAICompatible
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					organizationAllowList={organizationAllowList}
-					modelValidationError={modelValidationError}
-					simplifySettings={fromWelcomeView}
-				/>
+				<>
+					<VSCodeTextField
+						value={apiConfiguration?.openAiBaseUrl || ""}
+						type="url"
+						onInput={handleInputChange("openAiBaseUrl")}
+						placeholder={"Enter base URL..."}
+						className="w-full">
+						<span className="font-medium">Base URL</span>
+					</VSCodeTextField>
+					<VSCodeTextField
+						value={apiConfiguration?.openAiApiKey || ""}
+						type="password"
+						onInput={handleInputChange("openAiApiKey")}
+						placeholder="Enter API Key..."
+						className="w-full">
+						<span className="font-medium">API Key</span>
+					</VSCodeTextField>
+					<ModelPicker
+						apiConfiguration={apiConfiguration}
+						setApiConfigurationField={setApiConfigurationField}
+						defaultModelId="gpt-4o"
+						defaultModelInfo={openAiModelInfoSaneDefaults}
+						models={openAiModels}
+						modelIdKey="openAiModelId"
+						modelInfoKey="openAiCustomModelInfo"
+						serviceName="OpenAI"
+						serviceUrl="https://platform.openai.com"
+					/>
+					<Checkbox
+						checked={apiConfiguration?.openAiStreamingEnabled ?? true}
+						onChange={handleInputChange("openAiStreamingEnabled", noTransform)}>
+						Enable streaming
+					</Checkbox>
+					<Checkbox
+						checked={apiConfiguration?.openAiUseAzure ?? false}
+						onChange={handleInputChange("openAiUseAzure", noTransform)}>
+						Use Azure
+					</Checkbox>
+					<div>
+						<Checkbox
+							checked={azureApiVersionSelected}
+							onChange={(checked: boolean) => {
+								setAzureApiVersionSelected(checked)
+
+								if (!checked) {
+									setApiConfigurationField("azureApiVersion", "")
+								}
+							}}>
+							Set Azure API version
+						</Checkbox>
+						{azureApiVersionSelected && (
+							<VSCodeTextField
+								value={apiConfiguration?.azureApiVersion || ""}
+								onInput={handleInputChange("azureApiVersion")}
+								placeholder={`Default: ${azureOpenAiDefaultApiVersion}`}
+								className="w-full mt-1"
+							/>
+						)}
+					</div>
+
+					<div className="flex flex-col gap-3">
+						<div className="text-sm text-vscode-descriptionForeground">
+							Configure the capabilities and pricing for your custom OpenAI-compatible model. Be careful
+							when specifying the model capabilities, as they can affect how Roo Code performs.
+						</div>
+
+						<div>
+							<VSCodeTextField
+								value={
+									apiConfiguration?.openAiCustomModelInfo?.maxTokens?.toString() ||
+									openAiModelInfoSaneDefaults.maxTokens?.toString() ||
+									""
+								}
+								type="text"
+								style={{
+									borderColor: (() => {
+										const value = apiConfiguration?.openAiCustomModelInfo?.maxTokens
+
+										if (!value) {
+											return "var(--vscode-input-border)"
+										}
+
+										return value > 0
+											? "var(--vscode-charts-green)"
+											: "var(--vscode-errorForeground)"
+									})(),
+								}}
+								title="Maximum number of tokens the model can generate in a single response"
+								onInput={handleInputChange("openAiCustomModelInfo", (e) => {
+									const value = parseInt((e.target as HTMLInputElement).value)
+
+									return {
+										...(apiConfiguration?.openAiCustomModelInfo || openAiModelInfoSaneDefaults),
+										maxTokens: isNaN(value) ? undefined : value,
+									}
+								})}
+								placeholder="e.g. 4096"
+								className="w-full">
+								<span className="font-medium">Max Output Tokens</span>
+							</VSCodeTextField>
+							<div className="text-sm text-vscode-descriptionForeground">
+								Maximum number of tokens the model can generate in a response. (Specify -1 to allow the
+								server to set the max tokens.)
+							</div>
+						</div>
+
+						<div>
+							<VSCodeTextField
+								value={
+									apiConfiguration?.openAiCustomModelInfo?.contextWindow?.toString() ||
+									openAiModelInfoSaneDefaults.contextWindow?.toString() ||
+									""
+								}
+								type="text"
+								style={{
+									borderColor: (() => {
+										const value = apiConfiguration?.openAiCustomModelInfo?.contextWindow
+
+										if (!value) {
+											return "var(--vscode-input-border)"
+										}
+
+										return value > 0
+											? "var(--vscode-charts-green)"
+											: "var(--vscode-errorForeground)"
+									})(),
+								}}
+								title="Total number of tokens (input + output) the model can process in a single request"
+								onInput={handleInputChange("openAiCustomModelInfo", (e) => {
+									const value = (e.target as HTMLInputElement).value
+									const parsed = parseInt(value)
+
+									return {
+										...(apiConfiguration?.openAiCustomModelInfo || openAiModelInfoSaneDefaults),
+										contextWindow: isNaN(parsed)
+											? openAiModelInfoSaneDefaults.contextWindow
+											: parsed,
+									}
+								})}
+								placeholder="e.g. 128000"
+								className="w-full">
+								<span className="font-medium">Context Window Size</span>
+							</VSCodeTextField>
+							<div className="text-sm text-vscode-descriptionForeground">
+								Total tokens (input + output) the model can process.
+							</div>
+						</div>
+
+						<div>
+							<div className="flex items-center gap-1">
+								<Checkbox
+									checked={
+										apiConfiguration?.openAiCustomModelInfo?.supportsImages ??
+										openAiModelInfoSaneDefaults.supportsImages
+									}
+									onChange={handleInputChange("openAiCustomModelInfo", (checked) => {
+										return {
+											...(apiConfiguration?.openAiCustomModelInfo || openAiModelInfoSaneDefaults),
+											supportsImages: checked,
+										}
+									})}>
+									<span className="font-medium">Image Support</span>
+								</Checkbox>
+								<i
+									className="codicon codicon-info text-vscode-descriptionForeground"
+									title="Enable if the model can process and understand images in the input. Required for image-based assistance and visual code understanding."
+									style={{ fontSize: "12px" }}
+								/>
+							</div>
+							<div className="text-sm text-vscode-descriptionForeground pt-1">
+								Is this model capable of processing and understanding images?
+							</div>
+						</div>
+
+						<div>
+							<div className="flex items-center gap-1">
+								<Checkbox
+									checked={apiConfiguration?.openAiCustomModelInfo?.supportsComputerUse ?? false}
+									onChange={handleInputChange("openAiCustomModelInfo", (checked) => {
+										return {
+											...(apiConfiguration?.openAiCustomModelInfo || openAiModelInfoSaneDefaults),
+											supportsComputerUse: checked,
+										}
+									})}>
+									<span className="font-medium">Computer Use</span>
+								</Checkbox>
+								<i
+									className="codicon codicon-info text-vscode-descriptionForeground"
+									title="Enable if the model can interact with your computer through commands and file operations. Required for automated tasks and file modifications."
+									style={{ fontSize: "12px" }}
+								/>
+							</div>
+							<div className="text-sm text-vscode-descriptionForeground pt-1">
+								Is this model capable of interacting with a browser? (e.g. Claude 3.7 Sonnet).
+							</div>
+						</div>
+
+						<div>
+							<div className="flex items-center gap-1">
+								<Checkbox
+									checked={apiConfiguration?.openAiCustomModelInfo?.supportsPromptCache ?? false}
+									onChange={handleInputChange("openAiCustomModelInfo", (checked) => {
+										return {
+											...(apiConfiguration?.openAiCustomModelInfo || openAiModelInfoSaneDefaults),
+											supportsPromptCache: checked,
+										}
+									})}>
+									<span className="font-medium">Prompt Caching</span>
+								</Checkbox>
+								<i
+									className="codicon codicon-info text-vscode-descriptionForeground"
+									title="Enable if the model supports prompt caching. This can improve performance and reduce costs."
+									style={{ fontSize: "12px" }}
+								/>
+							</div>
+							<div className="text-sm text-vscode-descriptionForeground pt-1">
+								Is this model capable of caching prompts?
+							</div>
+						</div>
+
+						<div>
+							<VSCodeTextField
+								value={
+									apiConfiguration?.openAiCustomModelInfo?.inputPrice?.toString() ??
+									openAiModelInfoSaneDefaults.inputPrice?.toString() ??
+									""
+								}
+								type="text"
+								style={{
+									borderColor: (() => {
+										const value = apiConfiguration?.openAiCustomModelInfo?.inputPrice
+
+										if (!value && value !== 0) {
+											return "var(--vscode-input-border)"
+										}
+
+										return value >= 0
+											? "var(--vscode-charts-green)"
+											: "var(--vscode-errorForeground)"
+									})(),
+								}}
+								onChange={handleInputChange("openAiCustomModelInfo", (e) => {
+									const value = (e.target as HTMLInputElement).value
+									const parsed = parseFloat(value)
+
+									return {
+										...(apiConfiguration?.openAiCustomModelInfo ?? openAiModelInfoSaneDefaults),
+										inputPrice: isNaN(parsed) ? openAiModelInfoSaneDefaults.inputPrice : parsed,
+									}
+								})}
+								placeholder="e.g. 0.0001"
+								className="w-full">
+								<div className="flex items-center gap-1">
+									<span className="font-medium">Input Price</span>
+									<i
+										className="codicon codicon-info text-vscode-descriptionForeground"
+										title="Cost per million tokens in the input/prompt. This affects the cost of sending context and instructions to the model."
+										style={{ fontSize: "12px" }}
+									/>
+								</div>
+							</VSCodeTextField>
+						</div>
+
+						<div>
+							<VSCodeTextField
+								value={
+									apiConfiguration?.openAiCustomModelInfo?.outputPrice?.toString() ||
+									openAiModelInfoSaneDefaults.outputPrice?.toString() ||
+									""
+								}
+								type="text"
+								style={{
+									borderColor: (() => {
+										const value = apiConfiguration?.openAiCustomModelInfo?.outputPrice
+
+										if (!value && value !== 0) {
+											return "var(--vscode-input-border)"
+										}
+
+										return value >= 0
+											? "var(--vscode-charts-green)"
+											: "var(--vscode-errorForeground)"
+									})(),
+								}}
+								onChange={handleInputChange("openAiCustomModelInfo", (e) => {
+									const value = (e.target as HTMLInputElement).value
+									const parsed = parseFloat(value)
+
+									return {
+										...(apiConfiguration?.openAiCustomModelInfo || openAiModelInfoSaneDefaults),
+										outputPrice: isNaN(parsed) ? openAiModelInfoSaneDefaults.outputPrice : parsed,
+									}
+								})}
+								placeholder="e.g. 0.0002"
+								className="w-full">
+								<div className="flex items-center gap-1">
+									<span className="font-medium">Output Price</span>
+									<i
+										className="codicon codicon-info text-vscode-descriptionForeground"
+										title="Cost per million tokens in the model's response. This affects the cost of generated content and completions."
+										style={{ fontSize: "12px" }}
+									/>
+								</div>
+							</VSCodeTextField>
+						</div>
+
+						{apiConfiguration?.openAiCustomModelInfo?.supportsPromptCache && (
+							<>
+								<div>
+									<VSCodeTextField
+										value={
+											apiConfiguration?.openAiCustomModelInfo?.cacheReadsPrice?.toString() ?? "0"
+										}
+										type="text"
+										style={{
+											borderColor: (() => {
+												const value = apiConfiguration?.openAiCustomModelInfo?.cacheReadsPrice
+
+												if (!value && value !== 0) {
+													return "var(--vscode-input-border)"
+												}
+
+												return value >= 0
+													? "var(--vscode-charts-green)"
+													: "var(--vscode-errorForeground)"
+											})(),
+										}}
+										onChange={handleInputChange("openAiCustomModelInfo", (e) => {
+											const value = (e.target as HTMLInputElement).value
+											const parsed = parseFloat(value)
+
+											return {
+												...(apiConfiguration?.openAiCustomModelInfo ??
+													openAiModelInfoSaneDefaults),
+												cacheReadsPrice: isNaN(parsed) ? 0 : parsed,
+											}
+										})}
+										placeholder="e.g. 0.0001"
+										className="w-full">
+										<div className="flex items-center gap-1">
+											<span className="font-medium">Cache Reads Price</span>
+											<i
+												className="codicon codicon-info text-vscode-descriptionForeground"
+												title="Cost per million tokens for reading from the cache. This is the price charged when a cached response is retrieved."
+												style={{ fontSize: "12px" }}
+											/>
+										</div>
+									</VSCodeTextField>
+								</div>
+								<div>
+									<VSCodeTextField
+										value={
+											apiConfiguration?.openAiCustomModelInfo?.cacheWritesPrice?.toString() ?? "0"
+										}
+										type="text"
+										style={{
+											borderColor: (() => {
+												const value = apiConfiguration?.openAiCustomModelInfo?.cacheWritesPrice
+
+												if (!value && value !== 0) {
+													return "var(--vscode-input-border)"
+												}
+
+												return value >= 0
+													? "var(--vscode-charts-green)"
+													: "var(--vscode-errorForeground)"
+											})(),
+										}}
+										onChange={handleInputChange("openAiCustomModelInfo", (e) => {
+											const value = (e.target as HTMLInputElement).value
+											const parsed = parseFloat(value)
+
+											return {
+												...(apiConfiguration?.openAiCustomModelInfo ??
+													openAiModelInfoSaneDefaults),
+												cacheWritesPrice: isNaN(parsed) ? 0 : parsed,
+											}
+										})}
+										placeholder="e.g. 0.00005"
+										className="w-full">
+										<div className="flex items-center gap-1">
+											<span className="font-medium">Cache Writes Price</span>
+											<i
+												className="codicon codicon-info text-vscode-descriptionForeground"
+												title="Cost per million tokens for writing to the cache. This is the price charged when a prompt is cached for the first time."
+												style={{ fontSize: "12px" }}
+											/>
+										</div>
+									</VSCodeTextField>
+								</div>
+							</>
+						)}
+
+						<Button
+							variant="secondary"
+							onClick={() =>
+								setApiConfigurationField("openAiCustomModelInfo", openAiModelInfoSaneDefaults)
+							}>
+							Reset to Defaults
+						</Button>
+					</div>
+				</>
 			)}
 
 			{selectedProvider === "lmstudio" && (
-				<LMStudio
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					simplifySettings={fromWelcomeView}
-				/>
+				<>
+					<VSCodeTextField
+						value={apiConfiguration?.lmStudioBaseUrl || ""}
+						type="url"
+						onInput={handleInputChange("lmStudioBaseUrl")}
+						placeholder={"Default: http://localhost:1234"}
+						className="w-full">
+						<span className="font-medium">Base URL (optional)</span>
+					</VSCodeTextField>
+					<VSCodeTextField
+						value={apiConfiguration?.lmStudioModelId || ""}
+						onInput={handleInputChange("lmStudioModelId")}
+						placeholder={"e.g. meta-llama-3.1-8b-instruct"}
+						className="w-full">
+						<span className="font-medium">Model ID</span>
+					</VSCodeTextField>
+					{lmStudioModels.length > 0 && (
+						<VSCodeRadioGroup
+							value={
+								lmStudioModels.includes(apiConfiguration?.lmStudioModelId || "")
+									? apiConfiguration?.lmStudioModelId
+									: ""
+							}
+							onChange={handleInputChange("lmStudioModelId")}>
+							{lmStudioModels.map((model) => (
+								<VSCodeRadio
+									key={model}
+									value={model}
+									checked={apiConfiguration?.lmStudioModelId === model}>
+									{model}
+								</VSCodeRadio>
+							))}
+						</VSCodeRadioGroup>
+					)}
+					<Checkbox
+						checked={apiConfiguration?.lmStudioSpeculativeDecodingEnabled === true}
+						onChange={(checked) => {
+							// Explicitly set the boolean value using direct method.
+							setApiConfigurationField("lmStudioSpeculativeDecodingEnabled", checked)
+						}}>
+						Enable Speculative Decoding
+					</Checkbox>
+					{apiConfiguration?.lmStudioSpeculativeDecodingEnabled && (
+						<>
+							<div>
+								<VSCodeTextField
+									value={apiConfiguration?.lmStudioDraftModelId || ""}
+									onInput={handleInputChange("lmStudioDraftModelId")}
+									placeholder={"e.g. lmstudio-community/llama-3.2-1b-instruct"}
+									className="w-full">
+									<span className="font-medium">Draft Model ID</span>
+								</VSCodeTextField>
+								<div className="text-sm text-vscode-descriptionForeground">
+									Draft model must be from the same model family for speculative decoding to work
+									correctly.
+								</div>
+							</div>
+							{lmStudioModels.length > 0 && (
+								<>
+									<div className="font-medium">Select Draft Model</div>
+									<VSCodeRadioGroup
+										value={
+											lmStudioModels.includes(apiConfiguration?.lmStudioDraftModelId || "")
+												? apiConfiguration?.lmStudioDraftModelId
+												: ""
+										}
+										onChange={handleInputChange("lmStudioDraftModelId")}>
+										{lmStudioModels.map((model) => (
+											<VSCodeRadio key={`draft-${model}`} value={model}>
+												{model}
+											</VSCodeRadio>
+										))}
+									</VSCodeRadioGroup>
+									{lmStudioModels.length === 0 && (
+										<div
+											className="text-sm rounded-xs p-2"
+											style={{
+												backgroundColor: "var(--vscode-inputValidation-infoBackground)",
+												border: "1px solid var(--vscode-inputValidation-infoBorder)",
+												color: "var(--vscode-inputValidation-infoForeground)",
+											}}>
+											No draft models found. Please ensure LM Studio is running with Server Mode
+											enabled.
+										</div>
+									)}
+								</>
+							)}
+						</>
+					)}
+					<div className="text-sm text-vscode-descriptionForeground">
+						LM Studio allows you to run models locally on your computer. For instructions on how to get
+						started, see their <VSCodeLink href="https://lmstudio.ai/docs">quickstart guide</VSCodeLink>.
+						You will also need to start LM Studio's{" "}
+						<VSCodeLink href="https://lmstudio.ai/docs/basics/server">local server</VSCodeLink> feature to
+						use it with this extension.
+						<span className="text-vscode-errorForeground ml-1">
+							<span className="font-medium">Note:</span> Roo Code uses complex prompts and works best with
+							Claude models. Less capable models may not work as expected.
+						</span>
+					</div>
+				</>
 			)}
 
 			{selectedProvider === "deepseek" && (
-				<DeepSeek
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					simplifySettings={fromWelcomeView}
-				/>
-			)}
-
-			{selectedProvider === "doubao" && (
-				<Doubao
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					simplifySettings={fromWelcomeView}
-				/>
-			)}
-
-			{selectedProvider === "qwen-code" && (
-				<QwenCode
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					simplifySettings={fromWelcomeView}
-				/>
-			)}
-
-			{selectedProvider === "moonshot" && (
-				<Moonshot
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					simplifySettings={fromWelcomeView}
-				/>
-			)}
-
-			{selectedProvider === "minimax" && (
-				<MiniMax apiConfiguration={apiConfiguration} setApiConfigurationField={setApiConfigurationField} />
+				<>
+					<VSCodeTextField
+						value={apiConfiguration?.deepSeekApiKey || ""}
+						type="password"
+						onInput={handleInputChange("deepSeekApiKey")}
+						placeholder="Enter API Key..."
+						className="w-full">
+						<span className="font-medium">DeepSeek API Key</span>
+					</VSCodeTextField>
+					<div className="text-sm text-vscode-descriptionForeground -mt-2">
+						This key is stored locally and only used to make API requests from this extension.
+					</div>
+					{!apiConfiguration?.deepSeekApiKey && (
+						<VSCodeButtonLink href="https://platform.deepseek.com/" appearance="secondary">
+							Get DeepSeek API Key
+						</VSCodeButtonLink>
+					)}
+				</>
 			)}
 
 			{selectedProvider === "vscode-lm" && (
-				<VSCodeLM apiConfiguration={apiConfiguration} setApiConfigurationField={setApiConfigurationField} />
+				<>
+					<div className="dropdown-container">
+						<label htmlFor="vscode-lm-model" className="font-medium">
+							Language Model
+						</label>
+						{vsCodeLmModels.length > 0 ? (
+							<Select
+								value={
+									apiConfiguration?.vsCodeLmModelSelector
+										? `${apiConfiguration.vsCodeLmModelSelector.vendor ?? ""}/${apiConfiguration.vsCodeLmModelSelector.family ?? ""}`
+										: ""
+								}
+								onValueChange={handleInputChange("vsCodeLmModelSelector", (valueStr) => {
+									const [vendor, family] = valueStr.split("/")
+									return { vendor, family }
+								})}>
+								<SelectTrigger className="w-full">
+									<SelectValue placeholder="Select a model..." />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectGroup>
+										{vsCodeLmModels.map((model) => (
+											<SelectItem
+												key={`${model.vendor}/${model.family}`}
+												value={`${model.vendor}/${model.family}`}>
+												{`${model.vendor} - ${model.family}`}
+											</SelectItem>
+										))}
+									</SelectGroup>
+								</SelectContent>
+							</Select>
+						) : (
+							<div className="text-sm text-vscode-descriptionForeground">
+								The VS Code Language Model API allows you to run models provided by other VS Code
+								extensions (including but not limited to GitHub Copilot). The easiest way to get started
+								is to install the Copilot and Copilot Chat extensions from the VS Code Marketplace.
+							</div>
+						)}
+					</div>
+					<div className="text-sm text-vscode-errorForeground">
+						Note: This is a very experimental integration and provider support will vary. If you get an
+						error about a model not being supported, that's an issue on the provider's end.
+					</div>
+				</>
 			)}
 
 			{selectedProvider === "ollama" && (
-				<Ollama apiConfiguration={apiConfiguration} setApiConfigurationField={setApiConfigurationField} />
+				<>
+					<VSCodeTextField
+						value={apiConfiguration?.ollamaBaseUrl || ""}
+						type="url"
+						onInput={handleInputChange("ollamaBaseUrl")}
+						placeholder={"Default: http://localhost:11434"}
+						className="w-full">
+						<span className="font-medium">Base URL (optional)</span>
+					</VSCodeTextField>
+					<VSCodeTextField
+						value={apiConfiguration?.ollamaModelId || ""}
+						onInput={handleInputChange("ollamaModelId")}
+						placeholder={"e.g. llama3.1"}
+						className="w-full">
+						<span className="font-medium">Model ID</span>
+					</VSCodeTextField>
+					{ollamaModels.length > 0 && (
+						<VSCodeRadioGroup
+							value={
+								ollamaModels.includes(apiConfiguration?.ollamaModelId || "")
+									? apiConfiguration?.ollamaModelId
+									: ""
+							}
+							onChange={handleInputChange("ollamaModelId")}>
+							{ollamaModels.map((model) => (
+								<VSCodeRadio
+									key={model}
+									value={model}
+									checked={apiConfiguration?.ollamaModelId === model}>
+									{model}
+								</VSCodeRadio>
+							))}
+						</VSCodeRadioGroup>
+					)}
+					<div className="text-sm text-vscode-descriptionForeground">
+						Ollama allows you to run models locally on your computer. For instructions on how to get
+						started, see their
+						<VSCodeLink href="https://github.com/ollama/ollama/blob/main/README.md">
+							quickstart guide
+						</VSCodeLink>
+						.
+						<span className="text-vscode-errorForeground ml-1">
+							<span className="font-medium">Note:</span> Roo Code uses complex prompts and works best with
+							Claude models. Less capable models may not work as expected.
+						</span>
+					</div>
+				</>
 			)}
 
-			{selectedProvider === "xai" && (
-				<XAI apiConfiguration={apiConfiguration} setApiConfigurationField={setApiConfigurationField} />
-			)}
-
-			{selectedProvider === "groq" && (
-				<Groq apiConfiguration={apiConfiguration} setApiConfigurationField={setApiConfigurationField} />
-			)}
-
-			{selectedProvider === "huggingface" && (
-				<HuggingFace apiConfiguration={apiConfiguration} setApiConfigurationField={setApiConfigurationField} />
-			)}
-
-			{selectedProvider === "cerebras" && (
-				<Cerebras apiConfiguration={apiConfiguration} setApiConfigurationField={setApiConfigurationField} />
-			)}
-
-			{selectedProvider === "chutes" && (
-				<Chutes
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					routerModels={routerModels}
-					organizationAllowList={organizationAllowList}
-					modelValidationError={modelValidationError}
-					simplifySettings={fromWelcomeView}
-				/>
-			)}
-
-			{selectedProvider === "litellm" && (
-				<LiteLLM
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					organizationAllowList={organizationAllowList}
-					modelValidationError={modelValidationError}
-					simplifySettings={fromWelcomeView}
-				/>
-			)}
-
-			{selectedProvider === "sambanova" && (
-				<SambaNova apiConfiguration={apiConfiguration} setApiConfigurationField={setApiConfigurationField} />
-			)}
-
-			{selectedProvider === "zai" && (
-				<ZAi apiConfiguration={apiConfiguration} setApiConfigurationField={setApiConfigurationField} />
-			)}
-
-			{selectedProvider === "io-intelligence" && (
-				<IOIntelligence
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					organizationAllowList={organizationAllowList}
-					modelValidationError={modelValidationError}
-					simplifySettings={fromWelcomeView}
-				/>
-			)}
-
-			{selectedProvider === "vercel-ai-gateway" && (
-				<VercelAiGateway
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					routerModels={routerModels}
-					organizationAllowList={organizationAllowList}
-					modelValidationError={modelValidationError}
-					simplifySettings={fromWelcomeView}
-				/>
+			{selectedProvider === "unbound" && (
+				<>
+					<VSCodeTextField
+						value={apiConfiguration?.unboundApiKey || ""}
+						type="password"
+						onInput={handleInputChange("unboundApiKey")}
+						placeholder="Enter API Key..."
+						className="w-full">
+						<span className="font-medium">Unbound API Key</span>
+					</VSCodeTextField>
+					<div className="text-sm text-vscode-descriptionForeground -mt-2">
+						This key is stored locally and only used to make API requests from this extension.
+					</div>
+					{!apiConfiguration?.unboundApiKey && (
+						<VSCodeButtonLink href="https://gateway.getunbound.ai" appearance="secondary">
+							Get Unbound API Key
+						</VSCodeButtonLink>
+					)}
+				</>
 			)}
 
 			{selectedProvider === "human-relay" && (
 				<>
 					<div className="text-sm text-vscode-descriptionForeground">
-						{t("settings:providers.humanRelay.description")}
+						No API key is required, but the user needs to help copy and paste the information to the web
+						chat AI.
 					</div>
 					<div className="text-sm text-vscode-descriptionForeground">
-						{t("settings:providers.humanRelay.instructions")}
+						During use, a dialog box will pop up and the current message will be copied to the clipboard
+						automatically. You need to paste these to web versions of AI (such as ChatGPT or Claude), then
+						copy the AI's reply back to the dialog box and click the confirm button.
 					</div>
 				</>
 			)}
 
-			{selectedProvider === "fireworks" && (
-				<Fireworks apiConfiguration={apiConfiguration} setApiConfigurationField={setApiConfigurationField} />
-			)}
+			{/* Model Pickers */}
 
-			{selectedProvider === "roo" && (
-				<Roo
+			{selectedProvider === "openrouter" && (
+				<ModelPicker
 					apiConfiguration={apiConfiguration}
 					setApiConfigurationField={setApiConfigurationField}
-					routerModels={routerModels}
-					cloudIsAuthenticated={cloudIsAuthenticated}
-					organizationAllowList={organizationAllowList}
-					modelValidationError={modelValidationError}
-					simplifySettings={fromWelcomeView}
+					defaultModelId={openRouterDefaultModelId}
+					defaultModelInfo={openRouterDefaultModelInfo}
+					models={openRouterModels}
+					modelIdKey="openRouterModelId"
+					modelInfoKey="openRouterModelInfo"
+					serviceName="OpenRouter"
+					serviceUrl="https://openrouter.ai/models"
 				/>
 			)}
 
-			{selectedProvider === "featherless" && (
-				<Featherless apiConfiguration={apiConfiguration} setApiConfigurationField={setApiConfigurationField} />
+			{selectedProvider === "glama" && (
+				<ModelPicker
+					apiConfiguration={apiConfiguration}
+					setApiConfigurationField={setApiConfigurationField}
+					defaultModelId={glamaDefaultModelId}
+					defaultModelInfo={glamaDefaultModelInfo}
+					models={glamaModels}
+					modelInfoKey="glamaModelInfo"
+					modelIdKey="glamaModelId"
+					serviceName="Glama"
+					serviceUrl="https://glama.ai/models"
+				/>
 			)}
 
-			{selectedProviderModels.length > 0 && (
-				<>
-					<div>
-						<label className="block font-medium mb-1">{t("settings:providers.model")}</label>
-						<Select
-							value={selectedModelId === "custom-arn" ? "custom-arn" : selectedModelId}
-							onValueChange={(value) => {
-								setApiConfigurationField("apiModelId", value)
+			{selectedProvider === "unbound" && (
+				<ModelPicker
+					apiConfiguration={apiConfiguration}
+					defaultModelId={unboundDefaultModelId}
+					defaultModelInfo={unboundDefaultModelInfo}
+					models={unboundModels}
+					modelInfoKey="unboundModelInfo"
+					modelIdKey="unboundModelId"
+					serviceName="Unbound"
+					serviceUrl="https://api.getunbound.ai/models"
+					setApiConfigurationField={setApiConfigurationField}
+				/>
+			)}
 
-								// Clear custom ARN if not using custom ARN option.
-								if (value !== "custom-arn" && selectedProvider === "bedrock") {
+			{selectedProvider === "requesty" && (
+				<ModelPicker
+					apiConfiguration={apiConfiguration}
+					setApiConfigurationField={setApiConfigurationField}
+					defaultModelId={requestyDefaultModelId}
+					defaultModelInfo={requestyDefaultModelInfo}
+					models={requestyModels}
+					modelIdKey="requestyModelId"
+					modelInfoKey="requestyModelInfo"
+					serviceName="Requesty"
+					serviceUrl="https://requesty.ai"
+				/>
+			)}
+
+			{selectedProviderModelOptions.length > 0 && (
+				<>
+					<div className="dropdown-container">
+						<label htmlFor="model-id" className="font-medium">
+							Model
+						</label>
+						<Dropdown
+							id="model-id"
+							value={selectedModelId === "custom-arn" ? "custom-arn" : selectedModelId}
+							onChange={(value) => {
+								const modelValue = typeof value == "string" ? value : value?.value
+								setApiConfigurationField("apiModelId", modelValue)
+
+								// Clear custom ARN if not using custom ARN option
+								if (modelValue !== "custom-arn" && selectedProvider === "bedrock") {
 									setApiConfigurationField("awsCustomArn", "")
 								}
-
-								// Clear reasoning effort when switching models to allow the new model's default to take effect
-								// This is especially important for GPT-5 models which default to "medium"
-								if (selectedProvider === "openai-native") {
-									setApiConfigurationField("reasoningEffort", undefined)
-								}
-							}}>
-							<SelectTrigger className="w-full">
-								<SelectValue placeholder={t("settings:common.select")} />
-							</SelectTrigger>
-							<SelectContent>
-								{selectedProviderModels.map((option) => (
-									<SelectItem key={option.value} value={option.value}>
-										{option.label}
-									</SelectItem>
-								))}
-								{selectedProvider === "bedrock" && (
-									<SelectItem value="custom-arn">{t("settings:labels.useCustomArn")}</SelectItem>
-								)}
-							</SelectContent>
-						</Select>
+							}}
+							options={[
+								...selectedProviderModelOptions,
+								...(selectedProvider === "bedrock"
+									? [{ value: "custom-arn", label: "Use custom ARN..." }]
+									: []),
+							]}
+							className="w-full"
+						/>
 					</div>
 
-					{/* Show error if a deprecated model is selected */}
-					{selectedModelInfo?.deprecated && (
-						<ApiErrorMessage errorMessage={t("settings:validation.modelDeprecated")} />
-					)}
-
 					{selectedProvider === "bedrock" && selectedModelId === "custom-arn" && (
-						<BedrockCustomArn
-							apiConfiguration={apiConfiguration}
-							setApiConfigurationField={setApiConfigurationField}
-						/>
-					)}
+						<>
+							<VSCodeTextField
+								value={apiConfiguration?.awsCustomArn || ""}
+								onInput={(e) => {
+									const value = (e.target as HTMLInputElement).value
+									setApiConfigurationField("awsCustomArn", value)
+								}}
+								placeholder="Enter ARN (e.g. arn:aws:bedrock:us-east-1:123456789012:foundation-model/my-model)"
+								className="w-full">
+								<span className="font-medium">Custom ARN</span>
+							</VSCodeTextField>
+							<div className="text-sm text-vscode-descriptionForeground -mt-2">
+								Enter a valid AWS Bedrock ARN for the model you want to use. Format examples:
+								<ul className="list-disc pl-5 mt-1">
+									<li>
+										arn:aws:bedrock:us-east-1:123456789012:foundation-model/anthropic.claude-3-sonnet-20240229-v1:0
+									</li>
+									<li>
+										arn:aws:bedrock:us-west-2:123456789012:provisioned-model/my-provisioned-model
+									</li>
+									<li>
+										arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/anthropic.claude:1
+									</li>
+								</ul>
+								Make sure the region in the ARN matches your selected AWS Region above.
+							</div>
+							{apiConfiguration?.awsCustomArn &&
+								(() => {
+									const validation = validateBedrockArn(
+										apiConfiguration.awsCustomArn,
+										apiConfiguration.awsRegion,
+									)
 
-					{/* Only show model info if not deprecated */}
-					{!selectedModelInfo?.deprecated && (
-						<ModelInfoView
-							apiProvider={selectedProvider}
-							selectedModelId={selectedModelId}
-							modelInfo={selectedModelInfo}
-							isDescriptionExpanded={isDescriptionExpanded}
-							setIsDescriptionExpanded={setIsDescriptionExpanded}
-						/>
-					)}
-				</>
-			)}
+									if (!validation.isValid) {
+										return (
+											<div className="text-sm text-vscode-errorForeground mt-2">
+												{validation.errorMessage ||
+													"Invalid ARN format. Please check the examples above."}
+											</div>
+										)
+									}
 
-			{!fromWelcomeView &&
-				(selectedProvider === "roo" ? (
-					<SimpleThinkingBudget
-						key={`${selectedProvider}-${selectedModelId}`}
-						apiConfiguration={apiConfiguration}
-						setApiConfigurationField={setApiConfigurationField}
+									if (validation.errorMessage) {
+										return (
+											<div className="text-sm text-vscode-errorForeground mt-2">
+												{validation.errorMessage}
+											</div>
+										)
+									}
+
+									return null
+								})()}
+							=======
+						</>
+					)}
+					<ModelInfoView
+						selectedModelId={selectedModelId}
 						modelInfo={selectedModelInfo}
+						isDescriptionExpanded={isDescriptionExpanded}
+						setIsDescriptionExpanded={setIsDescriptionExpanded}
 					/>
-				) : (
 					<ThinkingBudget
 						key={`${selectedProvider}-${selectedModelId}`}
 						apiConfiguration={apiConfiguration}
 						setApiConfigurationField={setApiConfigurationField}
 						modelInfo={selectedModelInfo}
 					/>
-				))}
-
-			{/* Gate Verbosity UI by capability flag */}
-			{!fromWelcomeView && selectedModelInfo?.supportsVerbosity && (
-				<Verbosity
-					apiConfiguration={apiConfiguration}
-					setApiConfigurationField={setApiConfigurationField}
-					modelInfo={selectedModelInfo}
-				/>
+				</>
 			)}
 
 			{!fromWelcomeView && (
-				<Collapsible open={isAdvancedSettingsOpen} onOpenChange={setIsAdvancedSettingsOpen}>
-					<CollapsibleTrigger className="flex items-center gap-1 w-full cursor-pointer hover:opacity-80 mb-2">
-						<span className={`codicon codicon-chevron-${isAdvancedSettingsOpen ? "down" : "right"}`}></span>
-						<span className="font-medium">{t("settings:advancedSettings.title")}</span>
-					</CollapsibleTrigger>
-					<CollapsibleContent className="space-y-3">
-						<TodoListSettingsControl
-							todoListEnabled={apiConfiguration.todoListEnabled}
-							onChange={(field, value) => setApiConfigurationField(field, value)}
-						/>
-						<DiffSettingsControl
-							diffEnabled={apiConfiguration.diffEnabled}
-							fuzzyMatchThreshold={apiConfiguration.fuzzyMatchThreshold}
-							onChange={(field, value) => setApiConfigurationField(field, value)}
-						/>
-						{selectedModelInfo?.supportsTemperature !== false && (
-							<TemperatureControl
-								value={apiConfiguration.modelTemperature}
-								onChange={handleInputChange("modelTemperature", noTransform)}
-								maxValue={2}
-								defaultValue={selectedModelInfo?.defaultTemperature}
-							/>
-						)}
-						<RateLimitSecondsControl
-							value={apiConfiguration.rateLimitSeconds || 0}
-							onChange={(value) => setApiConfigurationField("rateLimitSeconds", value)}
-						/>
-						<ConsecutiveMistakeLimitControl
-							value={
-								apiConfiguration.consecutiveMistakeLimit !== undefined
-									? apiConfiguration.consecutiveMistakeLimit
-									: DEFAULT_CONSECUTIVE_MISTAKE_LIMIT
-							}
-							onChange={(value) => setApiConfigurationField("consecutiveMistakeLimit", value)}
-						/>
-						{selectedProvider === "openrouter" &&
-							openRouterModelProviders &&
-							Object.keys(openRouterModelProviders).length > 0 && (
-								<div>
-									<div className="flex items-center gap-1">
-										<label className="block font-medium mb-1">
-											{t("settings:providers.openRouter.providerRouting.title")}
-										</label>
-										<a href={`https://openrouter.ai/${selectedModelId}/providers`}>
-											<ExternalLinkIcon className="w-4 h-4" />
-										</a>
-									</div>
-									<Select
-										value={
-											apiConfiguration?.openRouterSpecificProvider ||
-											OPENROUTER_DEFAULT_PROVIDER_NAME
-										}
-										onValueChange={(value) =>
-											setApiConfigurationField("openRouterSpecificProvider", value)
-										}>
-										<SelectTrigger className="w-full">
-											<SelectValue placeholder={t("settings:common.select")} />
-										</SelectTrigger>
-										<SelectContent>
-											<SelectItem value={OPENROUTER_DEFAULT_PROVIDER_NAME}>
-												{OPENROUTER_DEFAULT_PROVIDER_NAME}
-											</SelectItem>
-											{Object.entries(openRouterModelProviders).map(([value, { label }]) => (
-												<SelectItem key={value} value={value}>
-													{label}
-												</SelectItem>
-											))}
-										</SelectContent>
-									</Select>
-									<div className="text-sm text-vscode-descriptionForeground mt-1">
-										{t("settings:providers.openRouter.providerRouting.description")}{" "}
-										<a href="https://openrouter.ai/docs/features/provider-routing">
-											{t("settings:providers.openRouter.providerRouting.learnMore")}.
-										</a>
-									</div>
-								</div>
-							)}
-						{showToolProtocolSelector && (
-							<div>
-								<label className="block font-medium mb-1">{t("settings:toolProtocol.label")}</label>
-								<Select
-									value={apiConfiguration.toolProtocol || "default"}
-									onValueChange={(value) => {
-										const newValue = value === "default" ? undefined : (value as ToolProtocol)
-										setApiConfigurationField("toolProtocol", newValue)
-									}}>
-									<SelectTrigger className="w-full">
-										<SelectValue placeholder={t("settings:common.select")} />
-									</SelectTrigger>
-									<SelectContent>
-										<SelectItem value="default">
-											{t("settings:toolProtocol.default")} (
-											{defaultProtocol === TOOL_PROTOCOL.NATIVE
-												? t("settings:toolProtocol.native")
-												: t("settings:toolProtocol.xml")}
-											)
-										</SelectItem>
-										<SelectItem value={TOOL_PROTOCOL.XML}>
-											{t("settings:toolProtocol.xml")}
-										</SelectItem>
-										<SelectItem value={TOOL_PROTOCOL.NATIVE}>
-											{t("settings:toolProtocol.native")}
-										</SelectItem>
-									</SelectContent>
-								</Select>
-								<div className="text-sm text-vscode-descriptionForeground mt-1">
-									{t("settings:toolProtocol.description")}
-								</div>
-							</div>
-						)}
-					</CollapsibleContent>
-				</Collapsible>
+				<TemperatureControl
+					value={apiConfiguration?.modelTemperature}
+					onChange={handleInputChange("modelTemperature", noTransform)}
+					maxValue={2}
+				/>
 			)}
 		</div>
 	)
+}
+
+export function getGlamaAuthUrl(uriScheme?: string) {
+	const callbackUrl = `${uriScheme || "vscode"}://rooveterinaryinc.roo-cline/glama`
+	return `https://glama.ai/oauth/authorize?callback_url=${encodeURIComponent(callbackUrl)}`
+}
+
+export function getOpenRouterAuthUrl(uriScheme?: string) {
+	return `https://openrouter.ai/auth?callback_url=${uriScheme || "vscode"}://rooveterinaryinc.roo-cline/openrouter`
+}
+
+export function normalizeApiConfiguration(apiConfiguration?: ApiConfiguration) {
+	const provider = apiConfiguration?.apiProvider || "anthropic"
+	const modelId = apiConfiguration?.apiModelId
+
+	const getProviderData = (models: Record<string, ModelInfo>, defaultId: string) => {
+		let selectedModelId: string
+		let selectedModelInfo: ModelInfo
+
+		if (modelId && modelId in models) {
+			selectedModelId = modelId
+			selectedModelInfo = models[modelId]
+		} else {
+			selectedModelId = defaultId
+			selectedModelInfo = models[defaultId]
+		}
+
+		return { selectedProvider: provider, selectedModelId, selectedModelInfo }
+	}
+
+	switch (provider) {
+		case "anthropic":
+			return getProviderData(anthropicModels, anthropicDefaultModelId)
+		case "bedrock":
+			// Special case for custom ARN
+			if (modelId === "custom-arn") {
+				return {
+					selectedProvider: provider,
+					selectedModelId: "custom-arn",
+					selectedModelInfo: {
+						maxTokens: 5000,
+						contextWindow: 128_000,
+						supportsPromptCache: false,
+						supportsImages: true,
+					},
+				}
+			}
+			return getProviderData(bedrockModels, bedrockDefaultModelId)
+		case "vertex":
+			return getProviderData(vertexModels, vertexDefaultModelId)
+		case "gemini":
+			return getProviderData(geminiModels, geminiDefaultModelId)
+		case "deepseek":
+			return getProviderData(deepSeekModels, deepSeekDefaultModelId)
+		case "openai-native":
+			return getProviderData(openAiNativeModels, openAiNativeDefaultModelId)
+		case "mistral":
+			return getProviderData(mistralModels, mistralDefaultModelId)
+		case "openrouter":
+			return {
+				selectedProvider: provider,
+				selectedModelId: apiConfiguration?.openRouterModelId || openRouterDefaultModelId,
+				selectedModelInfo: apiConfiguration?.openRouterModelInfo || openRouterDefaultModelInfo,
+			}
+		case "glama":
+			return {
+				selectedProvider: provider,
+				selectedModelId: apiConfiguration?.glamaModelId || glamaDefaultModelId,
+				selectedModelInfo: apiConfiguration?.glamaModelInfo || glamaDefaultModelInfo,
+			}
+		case "unbound":
+			return {
+				selectedProvider: provider,
+				selectedModelId: apiConfiguration?.unboundModelId || unboundDefaultModelId,
+				selectedModelInfo: apiConfiguration?.unboundModelInfo || unboundDefaultModelInfo,
+			}
+		case "requesty":
+			return {
+				selectedProvider: provider,
+				selectedModelId: apiConfiguration?.requestyModelId || requestyDefaultModelId,
+				selectedModelInfo: apiConfiguration?.requestyModelInfo || requestyDefaultModelInfo,
+			}
+		case "openai":
+			return {
+				selectedProvider: provider,
+				selectedModelId: apiConfiguration?.openAiModelId || "",
+				selectedModelInfo: apiConfiguration?.openAiCustomModelInfo || openAiModelInfoSaneDefaults,
+			}
+		case "ollama":
+			return {
+				selectedProvider: provider,
+				selectedModelId: apiConfiguration?.ollamaModelId || "",
+				selectedModelInfo: openAiModelInfoSaneDefaults,
+			}
+		case "lmstudio":
+			return {
+				selectedProvider: provider,
+				selectedModelId: apiConfiguration?.lmStudioModelId || "",
+				selectedModelInfo: openAiModelInfoSaneDefaults,
+			}
+		case "vscode-lm":
+			return {
+				selectedProvider: provider,
+				selectedModelId: apiConfiguration?.vsCodeLmModelSelector
+					? `${apiConfiguration.vsCodeLmModelSelector.vendor}/${apiConfiguration.vsCodeLmModelSelector.family}`
+					: "",
+				selectedModelInfo: {
+					...openAiModelInfoSaneDefaults,
+					supportsImages: false, // VSCode LM API currently doesn't support images.
+				},
+			}
+		default:
+			return getProviderData(anthropicModels, anthropicDefaultModelId)
+	}
 }
 
 export default memo(ApiOptions)

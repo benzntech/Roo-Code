@@ -1,109 +1,93 @@
 import { z } from "zod"
+import { ApiConfiguration, ApiProvider } from "./api"
+import { Mode, PromptComponent, ModeConfig } from "./modes"
 
-import {
-	type RooCodeSettings,
-	type ProviderSettings,
-	type PromptComponent,
-	type ModeConfig,
-	type InstallMarketplaceItemOptions,
-	type MarketplaceItem,
-	type ShareVisibility,
-	type QueuedMessage,
-	marketplaceItemSchema,
-} from "@roo-code/types"
-
-import { Mode } from "./modes"
-
-export type ClineAskResponse = "yesButtonClicked" | "noButtonClicked" | "messageResponse" | "objectResponse"
+export type ClineAskResponse = "yesButtonClicked" | "noButtonClicked" | "messageResponse"
 
 export type PromptMode = Mode | "enhance"
 
 export type AudioType = "notification" | "celebration" | "progress_loop"
 
-export interface UpdateTodoListPayload {
-	todos: any[]
-}
-
-export type EditQueuedMessagePayload = Pick<QueuedMessage, "id" | "text" | "images">
-
 export interface WebviewMessage {
 	type:
-		| "updateTodoList"
-		| "deleteMultipleTasksWithIds"
+		| "apiConfiguration"
 		| "currentApiConfigName"
 		| "saveApiConfiguration"
 		| "upsertApiConfiguration"
 		| "deleteApiConfiguration"
 		| "loadApiConfiguration"
-		| "loadApiConfigurationById"
 		| "renameApiConfiguration"
 		| "getListApiConfiguration"
 		| "customInstructions"
+		| "allowedCommands"
+		| "alwaysAllowReadOnly"
+		| "alwaysAllowWrite"
+		| "alwaysAllowExecute"
 		| "webviewDidLaunch"
 		| "newTask"
 		| "askResponse"
-		| "terminalOperation"
 		| "clearTask"
 		| "didShowAnnouncement"
 		| "selectImages"
 		| "exportCurrentTask"
-		| "shareCurrentTask"
 		| "showTaskWithId"
 		| "deleteTaskWithId"
 		| "exportTaskWithId"
-		| "importSettings"
-		| "exportSettings"
 		| "resetState"
-		| "flushRouterModels"
-		| "requestRouterModels"
-		| "requestOpenAiModels"
 		| "requestOllamaModels"
 		| "requestLmStudioModels"
-		| "requestRooModels"
-		| "requestRooCreditBalance"
-		| "requestVsCodeLmModels"
-		| "requestHuggingFaceModels"
 		| "openImage"
-		| "saveImage"
 		| "openFile"
 		| "openMention"
 		| "cancelTask"
-		| "updateVSCodeSetting"
-		| "getVSCodeSetting"
-		| "vsCodeSetting"
-		| "updateCondensingPrompt"
+		| "refreshOpenRouterModels"
+		| "refreshGlamaModels"
+		| "refreshUnboundModels"
+		| "refreshRequestyModels"
+		| "refreshOpenAiModels"
+		| "alwaysAllowBrowser"
+		| "alwaysAllowMcp"
+		| "alwaysAllowModeSwitch"
+		| "alwaysAllowSubtasks"
 		| "playSound"
-		| "playTts"
-		| "stopTts"
-		| "ttsEnabled"
-		| "ttsSpeed"
-		| "openKeyboardShortcuts"
+		| "soundEnabled"
+		| "soundVolume"
+		| "diffEnabled"
+		| "enableCheckpoints"
+		| "checkpointStorage"
+		| "browserViewportSize"
+		| "screenshotQuality"
+		| "remoteBrowserHost"
 		| "openMcpSettings"
-		| "openProjectMcpSettings"
 		| "restartMcpServer"
-		| "refreshAllMcpServers"
 		| "toggleToolAlwaysAllow"
-		| "toggleToolEnabledForPrompt"
 		| "toggleMcpServer"
 		| "updateMcpTimeout"
+		| "fuzzyMatchThreshold"
+		| "writeDelayMs"
 		| "enhancePrompt"
 		| "enhancedPrompt"
 		| "draggedImages"
 		| "deleteMessage"
-		| "deleteMessageConfirm"
-		| "submitEditedMessage"
-		| "editMessageConfirm"
+		| "terminalOutputLineLimit"
+		| "mcpEnabled"
 		| "enableMcpServerCreation"
-		| "remoteControlEnabled"
-		| "taskSyncEnabled"
+		| "enableCustomModeCreation"
 		| "searchCommits"
+		| "alwaysApproveResubmit"
+		| "requestDelaySeconds"
+		| "rateLimitSeconds"
 		| "setApiConfigPassword"
+		| "requestVsCodeLmModels"
 		| "mode"
 		| "updatePrompt"
+		| "updateSupportPrompt"
+		| "resetSupportPrompt"
 		| "getSystemPrompt"
 		| "copySystemPrompt"
 		| "systemPrompt"
 		| "enhancementApiConfigId"
+		| "updateExperimental"
 		| "autoApprovalEnabled"
 		| "updateCustomMode"
 		| "deleteCustomMode"
@@ -112,160 +96,48 @@ export interface WebviewMessage {
 		| "checkpointDiff"
 		| "checkpointRestore"
 		| "deleteMcpServer"
+		| "maxOpenTabsContext"
+		| "maxWorkspaceFiles"
 		| "humanRelayResponse"
 		| "humanRelayCancel"
-		| "codebaseIndexEnabled"
+		| "browserToolEnabled"
 		| "telemetrySetting"
+		| "showRooIgnoredFiles"
 		| "testBrowserConnection"
+		| "discoverBrowser"
 		| "browserConnectionResult"
-		| "searchFiles"
-		| "toggleApiConfigPin"
-		| "hasOpenedModeSelector"
-		| "cloudButtonClicked"
-		| "rooCloudSignIn"
-		| "cloudLandingPageSignIn"
-		| "rooCloudSignOut"
-		| "rooCloudManualUrl"
-		| "switchOrganization"
-		| "condenseTaskContextRequest"
-		| "requestIndexingStatus"
-		| "startIndexing"
-		| "clearIndexData"
-		| "indexingStatusUpdate"
-		| "indexCleared"
-		| "focusPanelRequest"
-		| "openExternal"
-		| "filterMarketplaceItems"
-		| "marketplaceButtonClicked"
-		| "installMarketplaceItem"
-		| "installMarketplaceItemWithParameters"
-		| "cancelMarketplaceInstall"
-		| "removeInstalledMarketplaceItem"
-		| "marketplaceInstallResult"
-		| "fetchMarketplaceData"
-		| "switchTab"
-		| "shareTaskSuccess"
-		| "exportMode"
-		| "exportModeResult"
-		| "importMode"
-		| "importModeResult"
-		| "checkRulesDirectory"
-		| "checkRulesDirectoryResult"
-		| "saveCodeIndexSettingsAtomic"
-		| "requestCodeIndexSecretStatus"
-		| "requestCommands"
-		| "openCommandFile"
-		| "deleteCommand"
-		| "createCommand"
-		| "insertTextIntoTextarea"
-		| "showMdmAuthRequiredNotification"
-		| "imageGenerationSettings"
-		| "queueMessage"
-		| "removeQueuedMessage"
-		| "editQueuedMessage"
-		| "dismissUpsell"
-		| "getDismissedUpsells"
-		| "updateSettings"
-		| "allowedCommands"
-		| "deniedCommands"
-		| "killBrowserSession"
-		| "openBrowserSessionPanel"
-		| "showBrowserSessionPanelAtStep"
-		| "refreshBrowserSessionPanel"
-		| "browserPanelDidLaunch"
-		| "openDebugApiHistory"
-		| "openDebugUiHistory"
+		| "remoteBrowserEnabled"
 	text?: string
-	editedMessageContent?: string
-	tab?: "settings" | "history" | "mcp" | "modes" | "chat" | "marketplace" | "cloud"
 	disabled?: boolean
-	context?: string
-	dataUri?: string
 	askResponse?: ClineAskResponse
-	apiConfiguration?: ProviderSettings
+	apiConfiguration?: ApiConfiguration
 	images?: string[]
 	bool?: boolean
 	value?: number
-	stepIndex?: number
-	isLaunchAction?: boolean
-	forceShow?: boolean
 	commands?: string[]
 	audioType?: AudioType
 	serverName?: string
 	toolName?: string
 	alwaysAllow?: boolean
-	isEnabled?: boolean
 	mode?: Mode
 	promptMode?: PromptMode
 	customPrompt?: PromptComponent
 	dataUrls?: string[]
 	values?: Record<string, any>
 	query?: string
-	setting?: string
 	slug?: string
 	modeConfig?: ModeConfig
 	timeout?: number
 	payload?: WebViewMessagePayload
 	source?: "global" | "project"
 	requestId?: string
-	ids?: string[]
-	hasSystemPromptOverride?: boolean
-	terminalOperation?: "continue" | "abort"
-	messageTs?: number
-	restoreCheckpoint?: boolean
-	historyPreviewCollapsed?: boolean
-	filters?: { type?: string; search?: string; tags?: string[] }
-	settings?: any
-	url?: string // For openExternal
-	mpItem?: MarketplaceItem
-	mpInstallOptions?: InstallMarketplaceItemOptions
-	config?: Record<string, any> // Add config to the payload
-	visibility?: ShareVisibility // For share visibility
-	hasContent?: boolean // For checkRulesDirectoryResult
-	checkOnly?: boolean // For deleteCustomMode check
-	upsellId?: string // For dismissUpsell
-	list?: string[] // For dismissedUpsells response
-	organizationId?: string | null // For organization switching
-	useProviderSignup?: boolean // For rooCloudSignIn to use provider signup flow
-	codeIndexSettings?: {
-		// Global state settings
-		codebaseIndexEnabled: boolean
-		codebaseIndexQdrantUrl: string
-		codebaseIndexEmbedderProvider:
-			| "openai"
-			| "ollama"
-			| "openai-compatible"
-			| "gemini"
-			| "mistral"
-			| "vercel-ai-gateway"
-			| "bedrock"
-			| "openrouter"
-		codebaseIndexEmbedderBaseUrl?: string
-		codebaseIndexEmbedderModelId: string
-		codebaseIndexEmbedderModelDimension?: number // Generic dimension for all providers
-		codebaseIndexOpenAiCompatibleBaseUrl?: string
-		codebaseIndexBedrockRegion?: string
-		codebaseIndexBedrockProfile?: string
-		codebaseIndexSearchMaxResults?: number
-		codebaseIndexSearchMinScore?: number
-
-		// Secret settings
-		codeIndexOpenAiKey?: string
-		codeIndexQdrantApiKey?: string
-		codebaseIndexOpenAiCompatibleApiKey?: string
-		codebaseIndexGeminiApiKey?: string
-		codebaseIndexMistralApiKey?: string
-		codebaseIndexVercelAiGatewayApiKey?: string
-		codebaseIndexOpenRouterApiKey?: string
-	}
-	updatedSettings?: RooCodeSettings
 }
 
 export const checkoutDiffPayloadSchema = z.object({
-	ts: z.number().optional(),
+	ts: z.number(),
 	previousCommitHash: z.string().optional(),
 	commitHash: z.string(),
-	mode: z.enum(["full", "checkpoint", "from-init", "to-current"]),
+	mode: z.enum(["full", "checkpoint"]),
 })
 
 export type CheckpointDiffPayload = z.infer<typeof checkoutDiffPayloadSchema>
@@ -278,30 +150,4 @@ export const checkoutRestorePayloadSchema = z.object({
 
 export type CheckpointRestorePayload = z.infer<typeof checkoutRestorePayloadSchema>
 
-export interface IndexingStatusPayload {
-	state: "Standby" | "Indexing" | "Indexed" | "Error"
-	message: string
-}
-
-export interface IndexClearedPayload {
-	success: boolean
-	error?: string
-}
-
-export const installMarketplaceItemWithParametersPayloadSchema = z.object({
-	item: marketplaceItemSchema,
-	parameters: z.record(z.string(), z.any()),
-})
-
-export type InstallMarketplaceItemWithParametersPayload = z.infer<
-	typeof installMarketplaceItemWithParametersPayloadSchema
->
-
-export type WebViewMessagePayload =
-	| CheckpointDiffPayload
-	| CheckpointRestorePayload
-	| IndexingStatusPayload
-	| IndexClearedPayload
-	| InstallMarketplaceItemWithParametersPayload
-	| UpdateTodoListPayload
-	| EditQueuedMessagePayload
+export type WebViewMessagePayload = CheckpointDiffPayload | CheckpointRestorePayload

@@ -1,16 +1,13 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import * as vscode from "vscode"
 
-import { type ModelInfo, openAiModelInfoSaneDefaults } from "@roo-code/types"
-
-import type { ApiHandlerOptions } from "../../shared/api"
-import { SELECTOR_SEPARATOR, stringifyVsCodeLmModelSelector } from "../../shared/vsCodeSelectorUtils"
-
+import { SingleCompletionHandler } from "../"
+import { calculateApiCostAnthropic } from "../../utils/cost"
 import { ApiStream } from "../transform/stream"
-import { convertToVsCodeLmMessages, extractTextCountFromMessage } from "../transform/vscode-lm-format"
-
+import { convertToVsCodeLmMessages } from "../transform/vscode-lm-format"
+import { SELECTOR_SEPARATOR, stringifyVsCodeLmModelSelector } from "../../shared/vsCodeSelectorUtils"
+import { ApiHandlerOptions, ModelInfo, openAiModelInfoSaneDefaults } from "../../shared/api"
 import { BaseProvider } from "./base-provider"
-import type { SingleCompletionHandler, ApiHandlerCreateMessageMetadata } from "../index"
 
 /**
  * Handles interaction with VS Code's Language Model API for chat-based operations.
@@ -64,7 +61,6 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 					}
 				}
 			})
-			this.initializeClient()
 		} catch (error) {
 			// Ensure cleanup if constructor fails
 			this.dispose()
@@ -74,30 +70,7 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 			)
 		}
 	}
-	/**
-	 * Initializes the VS Code Language Model client.
-	 * This method is called during the constructor to set up the client.
-	 * This useful when the client is not created yet and call getModel() before the client is created.
-	 * @returns Promise<void>
-	 * @throws Error when client initialization fails
-	 */
-	async initializeClient(): Promise<void> {
-		try {
-			// Check if the client is already initialized
-			if (this.client) {
-				console.debug("Roo Code <Language Model API>: Client already initialized")
-				return
-			}
-			// Create a new client instance
-			this.client = await this.createClient(this.options.vsCodeLmModelSelector || {})
-			console.debug("Roo Code <Language Model API>: Client initialized successfully")
-		} catch (error) {
-			// Handle errors during client initialization
-			const errorMessage = error instanceof Error ? error.message : "Unknown error"
-			console.error("Roo Code <Language Model API>: Client initialization failed:", errorMessage)
-			throw new Error(`Roo Code <Language Model API>: Failed to initialize client: ${errorMessage}`)
-		}
-	}
+
 	/**
 	 * Creates a language model chat client based on the provided selector.
 	 *
@@ -126,7 +99,7 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 				family: "lm",
 				version: "1.0",
 				maxInputTokens: 8192,
-				sendRequest: async (_messages, _options, _token) => {
+				sendRequest: async (messages, options, token) => {
 					// Provide a minimal implementation
 					return {
 						stream: (async function* () {
@@ -152,7 +125,6 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 	 *
 	 * @param systemPrompt - The system prompt to initialize the conversation context
 	 * @param messages - An array of message parameters following the Anthropic message format
-	 * @param metadata - Optional metadata for the message
 	 *
 	 * @yields {ApiStream} An async generator that yields either text chunks or tool calls from the model response
 	 *
@@ -231,8 +203,7 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 					console.debug("Roo Code <Language Model API>: Empty chat message content")
 					return 0
 				}
-				const countMessage = extractTextCountFromMessage(text)
-				tokenCount = await this.client.countTokens(countMessage, this.currentRequestCancellation.token)
+				tokenCount = await this.client.countTokens(text, this.currentRequestCancellation.token)
 			} else {
 				console.warn("Roo Code <Language Model API>: Invalid input type for token counting")
 				return 0
@@ -269,10 +240,15 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 		}
 	}
 
-	private async calculateTotalInputTokens(vsCodeLmMessages: vscode.LanguageModelChatMessage[]): Promise<number> {
+	private async calculateTotalInputTokens(
+		systemPrompt: string,
+		vsCodeLmMessages: vscode.LanguageModelChatMessage[],
+	): Promise<number> {
+		const systemTokens: number = await this.internalCountTokens(systemPrompt)
+
 		const messageTokens: number[] = await Promise.all(vsCodeLmMessages.map((msg) => this.internalCountTokens(msg)))
 
-		return messageTokens.reduce((sum: number, tokens: number): number => sum + tokens, 0)
+		return systemTokens + messageTokens.reduce((sum: number, tokens: number): number => sum + tokens, 0)
 	}
 
 	private ensureCleanState(): void {
@@ -306,13 +282,54 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 		return this.client
 	}
 
+	private cleanTerminalOutput(text: string): string {
+		if (!text) {
+			return ""
+		}
+
+		return (
+			text
+				// Нормализуем переносы строк
+				.replace(/\r\n/g, "\n")
+				.replace(/\r/g, "\n")
+
+				// Удаляем ANSI escape sequences
+				.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "") // Полный набор ANSI sequences
+				.replace(/\x9B[0-?]*[ -/]*[@-~]/g, "") // CSI sequences
+
+				// Удаляем последовательности установки заголовка терминала и прочие OSC sequences
+				.replace(/\x1B\][0-9;]*(?:\x07|\x1B\\)/g, "")
+
+				// Удаляем управляющие символы
+				.replace(/[\x00-\x09\x0B-\x0C\x0E-\x1F\x7F]/g, "")
+
+				// Удаляем escape-последовательности VS Code
+				.replace(/\x1B[PD].*?\x1B\\/g, "") // DCS sequences
+				.replace(/\x1B_.*?\x1B\\/g, "") // APC sequences
+				.replace(/\x1B\^.*?\x1B\\/g, "") // PM sequences
+				.replace(/\x1B\[[\d;]*[HfABCDEFGJKST]/g, "") // Cursor movement and clear screen
+
+				// Удаляем пути Windows и служебную информацию
+				.replace(/^(?:PS )?[A-Z]:\\[^\n]*$/gm, "")
+				.replace(/^;?Cwd=.*$/gm, "")
+
+				// Очищаем экранированные последовательности
+				.replace(/\\x[0-9a-fA-F]{2}/g, "")
+				.replace(/\\u[0-9a-fA-F]{4}/g, "")
+
+				// Финальная очистка
+				.replace(/\n{3,}/g, "\n\n") // Убираем множественные пустые строки
+				.trim()
+		)
+	}
+
 	private cleanMessageContent(content: any): any {
 		if (!content) {
 			return content
 		}
 
 		if (typeof content === "string") {
-			return content
+			return this.cleanTerminalOutput(content)
 		}
 
 		if (Array.isArray(content)) {
@@ -330,16 +347,13 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 		return content
 	}
 
-	override async *createMessage(
-		systemPrompt: string,
-		messages: Anthropic.Messages.MessageParam[],
-		metadata?: ApiHandlerCreateMessageMetadata,
-	): ApiStream {
+	override async *createMessage(systemPrompt: string, messages: Anthropic.Messages.MessageParam[]): ApiStream {
 		// Ensure clean state before starting a new request
 		this.ensureCleanState()
 		const client: vscode.LanguageModelChat = await this.getClient()
 
-		// Process messages
+		// Clean system prompt and messages
+		const cleanedSystemPrompt = this.cleanTerminalOutput(systemPrompt)
 		const cleanedMessages = messages.map((msg) => ({
 			...msg,
 			content: this.cleanMessageContent(msg.content),
@@ -347,7 +361,7 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 
 		// Convert Anthropic messages to VS Code LM messages
 		const vsCodeLmMessages: vscode.LanguageModelChatMessage[] = [
-			vscode.LanguageModelChatMessage.Assistant(systemPrompt),
+			vscode.LanguageModelChatMessage.Assistant(cleanedSystemPrompt),
 			...convertToVsCodeLmMessages(cleanedMessages),
 		]
 
@@ -355,7 +369,7 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 		this.currentRequestCancellation = new vscode.CancellationTokenSource()
 
 		// Calculate input tokens before starting the stream
-		const totalInputTokens: number = await this.calculateTotalInputTokens(vsCodeLmMessages)
+		const totalInputTokens: number = await this.calculateTotalInputTokens(systemPrompt, vsCodeLmMessages)
 
 		// Accumulate the text and count at the end of the stream to reduce token counting overhead.
 		let accumulatedText: string = ""
@@ -448,6 +462,7 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 				type: "usage",
 				inputTokens: totalInputTokens,
 				outputTokens: totalOutputTokens,
+				totalCost: calculateApiCostAnthropic(this.getModel().info, totalInputTokens, totalOutputTokens),
 			}
 		} catch (error: unknown) {
 			this.ensureCleanState()
@@ -560,13 +575,10 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 	}
 }
 
-// Static blacklist of VS Code Language Model IDs that should be excluded from the model list e.g. because they will never work
-const VSCODE_LM_STATIC_BLACKLIST: string[] = ["claude-3.7-sonnet", "claude-3.7-sonnet-thought"]
-
 export async function getVsCodeLmModels() {
 	try {
-		const models = (await vscode.lm.selectChatModels({})) || []
-		return models.filter((model) => !VSCODE_LM_STATIC_BLACKLIST.includes(model.id))
+		const models = await vscode.lm.selectChatModels({})
+		return models || []
 	} catch (error) {
 		console.error(
 			`Error fetching VS Code LM models: ${JSON.stringify(error, Object.getOwnPropertyNames(error), 2)}`,

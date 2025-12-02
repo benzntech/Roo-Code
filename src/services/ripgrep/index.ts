@@ -1,11 +1,9 @@
+import * as vscode from "vscode"
 import * as childProcess from "child_process"
 import * as path from "path"
+import * as fs from "fs"
 import * as readline from "readline"
-
-import * as vscode from "vscode"
-
 import { RooIgnoreController } from "../../core/ignore/RooIgnoreController"
-import { fileExistsAtPath } from "../../utils/fs"
 /*
 This file provides functionality to perform regex searches on files using ripgrep.
 Inspired by: https://github.com/DiscreteTom/vscode-ripgrep-utils
@@ -48,24 +46,18 @@ rel/path/to/helper.ts
 │----
 */
 
-const isWindows = process.platform.startsWith("win")
+const isWindows = /^win/.test(process.platform)
 const binName = isWindows ? "rg.exe" : "rg"
 
-interface SearchFileResult {
-	file: string
-	searchResults: SearchResult[]
-}
-
 interface SearchResult {
-	lines: SearchLineResult[]
+	file: string
+	line: number
+	column: number
+	match: string
+	beforeContext: string[]
+	afterContext: string[]
 }
 
-interface SearchLineResult {
-	line: number
-	text: string
-	isMatch: boolean
-	column?: number
-}
 // Constants
 const MAX_RESULTS = 300
 const MAX_LINE_LENGTH = 500
@@ -79,13 +71,11 @@ const MAX_LINE_LENGTH = 500
 export function truncateLine(line: string, maxLength: number = MAX_LINE_LENGTH): string {
 	return line.length > maxLength ? line.substring(0, maxLength) + " [truncated...]" : line
 }
-/**
- * Get the path to the ripgrep binary within the VSCode installation
- */
-export async function getBinPath(vscodeAppRoot: string): Promise<string | undefined> {
+
+async function getBinPath(vscodeAppRoot: string): Promise<string | undefined> {
 	const checkPath = async (pkgFolder: string) => {
 		const fullPath = path.join(vscodeAppRoot, pkgFolder, binName)
-		return (await fileExistsAtPath(fullPath)) ? fullPath : undefined
+		return (await pathExists(fullPath)) ? fullPath : undefined
 	}
 
 	return (
@@ -94,6 +84,14 @@ export async function getBinPath(vscodeAppRoot: string): Promise<string | undefi
 		(await checkPath("node_modules.asar.unpacked/vscode-ripgrep/bin/")) ||
 		(await checkPath("node_modules.asar.unpacked/@vscode/ripgrep/bin/"))
 	)
+}
+
+async function pathExists(path: string): Promise<boolean> {
+	return new Promise((resolve) => {
+		fs.access(path, (err) => {
+			resolve(err === null)
+		})
+	})
 }
 
 async function execRipgrep(bin: string, args: string[]): Promise<string> {
@@ -150,15 +148,7 @@ export async function regexSearchFiles(
 		throw new Error("Could not find ripgrep binary")
 	}
 
-	const args = ["--json", "-e", regex]
-
-	// Only add --glob if a specific file pattern is provided
-	// Using --glob "*" overrides .gitignore behavior, so we omit it when no pattern is specified
-	if (filePattern) {
-		args.push("--glob", filePattern)
-	}
-
-	args.push("--context", "1", "--no-messages", directoryPath)
+	const args = ["--json", "-e", regex, "--glob", filePattern || "*", "--context", "1", directoryPath]
 
 	let output: string
 	try {
@@ -167,49 +157,39 @@ export async function regexSearchFiles(
 		console.error("Error executing ripgrep:", error)
 		return "No results found"
 	}
-
-	const results: SearchFileResult[] = []
-	let currentFile: SearchFileResult | null = null
+	const results: SearchResult[] = []
+	let currentResult: Partial<SearchResult> | null = null
 
 	output.split("\n").forEach((line) => {
 		if (line) {
 			try {
 				const parsed = JSON.parse(line)
-				if (parsed.type === "begin") {
-					currentFile = {
-						file: parsed.data.path.text.toString(),
-						searchResults: [],
+				if (parsed.type === "match") {
+					if (currentResult) {
+						results.push(currentResult as SearchResult)
 					}
-				} else if (parsed.type === "end") {
-					// Reset the current result when a new file is encountered
-					results.push(currentFile as SearchFileResult)
-					currentFile = null
-				} else if ((parsed.type === "match" || parsed.type === "context") && currentFile) {
-					const line = {
+
+					// Safety check: truncate extremely long lines to prevent excessive output
+					const matchText = parsed.data.lines.text
+					const truncatedMatch = truncateLine(matchText)
+
+					currentResult = {
+						file: parsed.data.path.text,
 						line: parsed.data.line_number,
-						text: truncateLine(parsed.data.lines.text),
-						isMatch: parsed.type === "match",
-						...(parsed.type === "match" && { column: parsed.data.absolute_offset }),
+						column: parsed.data.submatches[0].start,
+						match: truncatedMatch,
+						beforeContext: [],
+						afterContext: [],
 					}
+				} else if (parsed.type === "context" && currentResult) {
+					// Apply the same truncation logic to context lines
+					const contextText = parsed.data.lines.text
+					const truncatedContext = truncateLine(contextText)
 
-					const lastResult = currentFile.searchResults[currentFile.searchResults.length - 1]
-					if (lastResult?.lines.length > 0) {
-						const lastLine = lastResult.lines[lastResult.lines.length - 1]
-
-						// If this line is contiguous with the last result, add to it
-						if (parsed.data.line_number <= lastLine.line + 1) {
-							lastResult.lines.push(line)
-						} else {
-							// Otherwise create a new result
-							currentFile.searchResults.push({
-								lines: [line],
-							})
-						}
+					if (parsed.data.line_number < currentResult.line!) {
+						currentResult.beforeContext!.push(truncatedContext)
 					} else {
-						// First line in file
-						currentFile.searchResults.push({
-							lines: [line],
-						})
+						currentResult.afterContext!.push(truncatedContext)
 					}
 				}
 			} catch (error) {
@@ -218,7 +198,9 @@ export async function regexSearchFiles(
 		}
 	})
 
-	// console.log(results)
+	if (currentResult) {
+		results.push(currentResult as SearchResult)
+	}
 
 	// Filter results using RooIgnoreController if provided
 	const filteredResults = rooIgnoreController
@@ -228,43 +210,40 @@ export async function regexSearchFiles(
 	return formatResults(filteredResults, cwd)
 }
 
-function formatResults(fileResults: SearchFileResult[], cwd: string): string {
+function formatResults(results: SearchResult[], cwd: string): string {
 	const groupedResults: { [key: string]: SearchResult[] } = {}
 
-	let totalResults = fileResults.reduce((sum, file) => sum + file.searchResults.length, 0)
 	let output = ""
-	if (totalResults >= MAX_RESULTS) {
+	if (results.length >= MAX_RESULTS) {
 		output += `Showing first ${MAX_RESULTS} of ${MAX_RESULTS}+ results. Use a more specific search if necessary.\n\n`
 	} else {
-		output += `Found ${totalResults === 1 ? "1 result" : `${totalResults.toLocaleString()} results`}.\n\n`
+		output += `Found ${results.length === 1 ? "1 result" : `${results.length.toLocaleString()} results`}.\n\n`
 	}
 
 	// Group results by file name
-	fileResults.slice(0, MAX_RESULTS).forEach((file) => {
-		const relativeFilePath = path.relative(cwd, file.file)
+	results.slice(0, MAX_RESULTS).forEach((result) => {
+		const relativeFilePath = path.relative(cwd, result.file)
 		if (!groupedResults[relativeFilePath]) {
 			groupedResults[relativeFilePath] = []
-
-			groupedResults[relativeFilePath].push(...file.searchResults)
 		}
+		groupedResults[relativeFilePath].push(result)
 	})
 
 	for (const [filePath, fileResults] of Object.entries(groupedResults)) {
-		output += `# ${filePath.toPosix()}\n`
+		output += `${filePath.toPosix()}\n│----\n`
 
-		fileResults.forEach((result) => {
-			// Only show results with at least one line
-			if (result.lines.length > 0) {
-				// Show all lines in the result
-				result.lines.forEach((line) => {
-					const lineNumber = String(line.line).padStart(3, " ")
-					output += `${lineNumber} | ${line.text.trimEnd()}\n`
-				})
-				output += "----\n"
+		fileResults.forEach((result, index) => {
+			const allLines = [...result.beforeContext, result.match, ...result.afterContext]
+			allLines.forEach((line) => {
+				output += `│${line?.trimEnd() ?? ""}\n`
+			})
+
+			if (index < fileResults.length - 1) {
+				output += "│----\n"
 			}
 		})
 
-		output += "\n"
+		output += "│----\n\n"
 	}
 
 	return output.trim()

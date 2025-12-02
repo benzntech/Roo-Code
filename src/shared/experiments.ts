@@ -1,29 +1,54 @@
-import type { AssertEqual, Equals, Keys, Values, ExperimentId, Experiments } from "@roo-code/types"
-
 export const EXPERIMENT_IDS = {
-	MULTI_FILE_APPLY_DIFF: "multiFileApplyDiff",
+	DIFF_STRATEGY: "experimentalDiffStrategy",
+	SEARCH_AND_REPLACE: "search_and_replace",
+	INSERT_BLOCK: "insert_content",
 	POWER_STEERING: "powerSteering",
-	PREVENT_FOCUS_DISRUPTION: "preventFocusDisruption",
-	IMAGE_GENERATION: "imageGeneration",
-	RUN_SLASH_COMMAND: "runSlashCommand",
-	MULTIPLE_NATIVE_TOOL_CALLS: "multipleNativeToolCalls",
-} as const satisfies Record<string, ExperimentId>
+	MULTI_SEARCH_AND_REPLACE: "multi_search_and_replace",
+} as const
 
-type _AssertExperimentIds = AssertEqual<Equals<ExperimentId, Values<typeof EXPERIMENT_IDS>>>
+export type ExperimentKey = keyof typeof EXPERIMENT_IDS
+export type ExperimentId = valueof<typeof EXPERIMENT_IDS>
 
-type ExperimentKey = Keys<typeof EXPERIMENT_IDS>
-
-interface ExperimentConfig {
+export interface ExperimentConfig {
+	name: string
+	description: string
 	enabled: boolean
 }
 
+type valueof<X> = X[keyof X]
+
 export const experimentConfigsMap: Record<ExperimentKey, ExperimentConfig> = {
-	MULTI_FILE_APPLY_DIFF: { enabled: false },
-	POWER_STEERING: { enabled: false },
-	PREVENT_FOCUS_DISRUPTION: { enabled: false },
-	IMAGE_GENERATION: { enabled: false },
-	RUN_SLASH_COMMAND: { enabled: false },
-	MULTIPLE_NATIVE_TOOL_CALLS: { enabled: false },
+	DIFF_STRATEGY: {
+		name: "Use experimental unified diff strategy",
+		description:
+			"Enable the experimental unified diff strategy. This strategy might reduce the number of retries caused by model errors but may cause unexpected behavior or incorrect edits. Only enable if you understand the risks and are willing to carefully review all changes.",
+		enabled: false,
+	},
+	SEARCH_AND_REPLACE: {
+		name: "Use experimental search and replace tool",
+		description:
+			"Enable the experimental search and replace tool, allowing Roo to replace multiple instances of a search term in one request.",
+		enabled: false,
+	},
+	INSERT_BLOCK: {
+		name: "Use experimental insert content tool",
+
+		description:
+			"Enable the experimental insert content tool, allowing Roo to insert content at specific line numbers without needing to create a diff.",
+		enabled: false,
+	},
+	POWER_STEERING: {
+		name: 'Use experimental "power steering" mode',
+		description:
+			"When enabled, Roo will remind the model about the details of its current mode definition more frequently. This will lead to stronger adherence to role definitions and custom instructions, but will use more tokens per message.",
+		enabled: false,
+	},
+	MULTI_SEARCH_AND_REPLACE: {
+		name: "Use experimental multi block diff tool",
+		description:
+			"When enabled, Roo will use multi block diff tool. This will try to update multiple code blocks in the file in one request.",
+		enabled: false,
+	},
 }
 
 export const experimentDefault = Object.fromEntries(
@@ -34,6 +59,25 @@ export const experimentDefault = Object.fromEntries(
 ) as Record<ExperimentId, boolean>
 
 export const experiments = {
-	get: (id: ExperimentKey): ExperimentConfig | undefined => experimentConfigsMap[id],
-	isEnabled: (experimentsConfig: Experiments, id: ExperimentId) => experimentsConfig[id] ?? experimentDefault[id],
+	get: (id: ExperimentKey): ExperimentConfig | undefined => {
+		return experimentConfigsMap[id]
+	},
+	isEnabled: (experimentsConfig: Record<ExperimentId, boolean>, id: ExperimentId): boolean => {
+		return experimentsConfig[id] ?? experimentDefault[id]
+	},
 } as const
+
+// Expose experiment details for UI - pre-compute from map for better performance
+export const experimentLabels = Object.fromEntries(
+	Object.entries(experimentConfigsMap).map(([_, config]) => [
+		EXPERIMENT_IDS[_ as keyof typeof EXPERIMENT_IDS] as ExperimentId,
+		config.name,
+	]),
+) as Record<string, string>
+
+export const experimentDescriptions = Object.fromEntries(
+	Object.entries(experimentConfigsMap).map(([_, config]) => [
+		EXPERIMENT_IDS[_ as keyof typeof EXPERIMENT_IDS] as ExperimentId,
+		config.description,
+	]),
+) as Record<string, string>

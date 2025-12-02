@@ -1,37 +1,77 @@
 import { memo } from "react"
 
-import { vscode } from "@src/utils/vscode"
-import { useAppTranslation } from "@src/i18n/TranslationContext"
+import { vscode } from "@/utils/vscode"
+import { formatLargeNumber, formatDate } from "@/utils/format"
+import { Button } from "@/components/ui"
 
-import { useTaskSearch } from "./useTaskSearch"
-import TaskItem from "./TaskItem"
+import { useExtensionState } from "../../context/ExtensionStateContext"
+import { CopyButton } from "./CopyButton"
 
-const HistoryPreview = () => {
-	const { tasks } = useTaskSearch()
-	const { t } = useAppTranslation()
+type HistoryPreviewProps = {
+	showHistoryView: () => void
+}
 
-	const handleViewAllHistory = () => {
-		vscode.postMessage({ type: "switchTab", tab: "history" })
-	}
+const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
+	const { taskHistory } = useExtensionState()
 
 	return (
-		<div className="flex flex-col gap-1">
-			<div className="flex flex-wrap items-center justify-between mt-4 mb-2">
-				<h2 className="font-semibold text-lg grow m-0">{t("history:recentTasks")}</h2>
-				<button
-					onClick={handleViewAllHistory}
-					className="text-base text-vscode-descriptionForeground hover:text-vscode-textLink-foreground transition-colors cursor-pointer"
-					aria-label={t("history:viewAllHistory")}>
-					{t("history:viewAllHistory")}
-				</button>
+		<div className="flex flex-col gap-3 shrink-0 mx-5">
+			<div className="flex items-center justify-between text-vscode-descriptionForeground">
+				<div className="flex items-center gap-1">
+					<span className="codicon codicon-comment-discussion scale-90 mr-1" />
+					<span className="font-medium text-xs uppercase">Recent Tasks</span>
+				</div>
+				<Button variant="ghost" size="sm" onClick={() => showHistoryView()} className="uppercase">
+					View All
+				</Button>
 			</div>
-			{tasks.length !== 0 && (
-				<>
-					{tasks.slice(0, 4).map((item) => (
-						<TaskItem key={item.id} item={item} variant="compact" />
-					))}
-				</>
-			)}
+			{taskHistory.slice(0, 3).map((item) => (
+				<div
+					key={item.id}
+					className="bg-vscode-toolbar-hoverBackground/50 hover:bg-vscode-toolbar-hoverBackground/75 rounded-xs relative overflow-hidden opacity-90 hover:opacity-100 cursor-pointer"
+					onClick={() => vscode.postMessage({ type: "showTaskWithId", text: item.id })}>
+					<div className="flex flex-col gap-2 p-3 pt-1">
+						<div className="flex justify-between items-center">
+							<span className="text-xs font-medium text-vscode-descriptionForeground uppercase">
+								{formatDate(item.ts)}
+							</span>
+							<CopyButton itemTask={item.task} />
+						</div>
+						<div
+							className="text-vscode-descriptionForeground overflow-hidden whitespace-pre-wrap"
+							style={{
+								display: "-webkit-box",
+								WebkitLineClamp: 3,
+								WebkitBoxOrient: "vertical",
+								wordBreak: "break-word",
+								overflowWrap: "anywhere",
+							}}>
+							{item.task}
+						</div>
+						<div className="text-xs text-vscode-descriptionForeground">
+							<span>
+								Tokens: ↑{formatLargeNumber(item.tokensIn || 0)} ↓
+								{formatLargeNumber(item.tokensOut || 0)}
+							</span>
+							{!!item.cacheWrites && (
+								<>
+									{" • "}
+									<span>
+										Cache: +{formatLargeNumber(item.cacheWrites || 0)} →{" "}
+										{formatLargeNumber(item.cacheReads || 0)}
+									</span>
+								</>
+							)}
+							{!!item.totalCost && (
+								<>
+									{" • "}
+									<span>API Cost: ${item.totalCost?.toFixed(4)}</span>
+								</>
+							)}
+						</div>
+					</div>
+				</div>
+			))}
 		</div>
 	)
 }
