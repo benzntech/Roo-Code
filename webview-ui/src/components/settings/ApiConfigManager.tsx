@@ -1,14 +1,25 @@
-import { VSCodeButton, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
 import { memo, useEffect, useRef, useState } from "react"
-import { ApiConfigMeta } from "../../../../src/shared/ExtensionMessage"
-import { Dropdown } from "vscrui"
-import type { DropdownOption } from "vscrui"
-import { Dialog, DialogContent, DialogTitle } from "../ui/dialog"
-import { Button, Input } from "../ui"
+import { VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
+import { AlertTriangle } from "lucide-react"
+
+import type { ProviderSettingsEntry, OrganizationAllowList } from "@roo-code/types"
+
+import { useAppTranslation } from "@/i18n/TranslationContext"
+import {
+	type SearchableSelectOption,
+	Button,
+	Input,
+	Dialog,
+	DialogContent,
+	DialogTitle,
+	StandardTooltip,
+	SearchableSelect,
+} from "@/components/ui"
 
 interface ApiConfigManagerProps {
 	currentApiConfigName?: string
-	listApiConfigMeta?: ApiConfigMeta[]
+	listApiConfigMeta?: ProviderSettingsEntry[]
+	organizationAllowList?: OrganizationAllowList
 	onSelectConfig: (configName: string) => void
 	onDeleteConfig: (configName: string) => void
 	onRenameConfig: (oldName: string, newName: string) => void
@@ -18,11 +29,14 @@ interface ApiConfigManagerProps {
 const ApiConfigManager = ({
 	currentApiConfigName = "",
 	listApiConfigMeta = [],
+	organizationAllowList,
 	onSelectConfig,
 	onDeleteConfig,
 	onRenameConfig,
 	onUpsertConfig,
 }: ApiConfigManagerProps) => {
+	const { t } = useAppTranslation()
+
 	const [isRenaming, setIsRenaming] = useState(false)
 	const [isCreating, setIsCreating] = useState(false)
 	const [inputValue, setInputValue] = useState("")
@@ -31,20 +45,40 @@ const ApiConfigManager = ({
 	const inputRef = useRef<any>(null)
 	const newProfileInputRef = useRef<any>(null)
 
+	// Check if a profile is valid based on the organization allow list
+	const isProfileValid = (profile: ProviderSettingsEntry): boolean => {
+		// If no organization allow list or allowAll is true, all profiles are valid
+		if (!organizationAllowList || organizationAllowList.allowAll) {
+			return true
+		}
+
+		// Check if the provider is allowed
+		const provider = profile.apiProvider
+		if (!provider) return true
+
+		const providerConfig = organizationAllowList.providers[provider]
+		if (!providerConfig) {
+			return false
+		}
+
+		// If provider allows all models, profile is valid
+		return !!providerConfig.allowAll || !!(providerConfig.models && providerConfig.models.length > 0)
+	}
+
 	const validateName = (name: string, isNewProfile: boolean): string | null => {
 		const trimmed = name.trim()
-		if (!trimmed) return "Name cannot be empty"
+		if (!trimmed) return t("settings:providers.nameEmpty")
 
 		const nameExists = listApiConfigMeta?.some((config) => config.name.toLowerCase() === trimmed.toLowerCase())
 
-		// For new profiles, any existing name is invalid
+		// For new profiles, any existing name is invalid.
 		if (isNewProfile && nameExists) {
-			return "A profile with this name already exists"
+			return t("settings:providers.nameExists")
 		}
 
-		// For rename, only block if trying to rename to a different existing profile
+		// For rename, only block if trying to rename to a different existing profile.
 		if (!isNewProfile && nameExists && trimmed.toLowerCase() !== currentApiConfigName?.toLowerCase()) {
-			return "A profile with this name already exists"
+			return t("settings:providers.nameExists")
 		}
 
 		return null
@@ -62,7 +96,7 @@ const ApiConfigManager = ({
 		setError(null)
 	}
 
-	// Focus input when entering rename mode
+	// Focus input when entering rename mode.
 	useEffect(() => {
 		if (isRenaming) {
 			const timeoutId = setTimeout(() => inputRef.current?.focus(), 0)
@@ -70,7 +104,7 @@ const ApiConfigManager = ({
 		}
 	}, [isRenaming])
 
-	// Focus input when opening new dialog
+	// Focus input when opening new dialog.
 	useEffect(() => {
 		if (isCreating) {
 			const timeoutId = setTimeout(() => newProfileInputRef.current?.focus(), 0)
@@ -78,11 +112,16 @@ const ApiConfigManager = ({
 		}
 	}, [isCreating])
 
-	// Reset state when current profile changes
+	// Reset state when current profile changes.
 	useEffect(() => {
 		resetCreateState()
 		resetRenameState()
 	}, [currentApiConfigName])
+
+	const handleSelectConfig = (configName: string) => {
+		if (!configName) return
+		onSelectConfig(configName)
+	}
 
 	const handleAdd = () => {
 		resetCreateState()
@@ -135,7 +174,7 @@ const ApiConfigManager = ({
 	const handleDelete = () => {
 		if (!currentApiConfigName || !listApiConfigMeta || listApiConfigMeta.length <= 1) return
 
-		// Let the extension handle both deletion and selection
+		// Let the extension handle both deletion and selection.
 		onDeleteConfig(currentApiConfigName)
 	}
 
@@ -143,15 +182,11 @@ const ApiConfigManager = ({
 
 	return (
 		<div className="flex flex-col gap-1">
-			<label htmlFor="config-profile">
-				<span className="font-medium">Configuration Profile</span>
-			</label>
+			<label className="block font-medium mb-1">{t("settings:providers.configProfile")}</label>
 
 			{isRenaming ? (
-				<div
-					data-testid="rename-form"
-					style={{ display: "flex", gap: "4px", alignItems: "center", flexDirection: "column" }}>
-					<div style={{ display: "flex", gap: "4px", alignItems: "center", width: "100%" }}>
+				<div data-testid="rename-form">
+					<div className="flex items-center gap-1">
 						<VSCodeTextField
 							ref={inputRef}
 							value={inputValue}
@@ -160,120 +195,106 @@ const ApiConfigManager = ({
 								setInputValue(target.target.value)
 								setError(null)
 							}}
-							placeholder="Enter new name"
-							style={{ flexGrow: 1 }}
-							onKeyDown={(e: unknown) => {
-								const event = e as { key: string }
-								if (event.key === "Enter" && inputValue.trim()) {
+							placeholder={t("settings:providers.enterNewName")}
+							onKeyDown={({ key }) => {
+								if (key === "Enter" && inputValue.trim()) {
 									handleSave()
-								} else if (event.key === "Escape") {
+								} else if (key === "Escape") {
 									handleCancel()
 								}
 							}}
+							className="grow"
 						/>
-						<VSCodeButton
-							appearance="icon"
-							disabled={!inputValue.trim()}
-							onClick={handleSave}
-							title="Save"
-							style={{
-								padding: 0,
-								margin: 0,
-								height: "28px",
-								width: "28px",
-								minWidth: "28px",
-							}}>
-							<span className="codicon codicon-check" />
-						</VSCodeButton>
-						<VSCodeButton
-							appearance="icon"
-							onClick={handleCancel}
-							title="Cancel"
-							style={{
-								padding: 0,
-								margin: 0,
-								height: "28px",
-								width: "28px",
-								minWidth: "28px",
-							}}>
-							<span className="codicon codicon-close" />
-						</VSCodeButton>
+						<StandardTooltip content={t("settings:common.save")}>
+							<Button
+								variant="ghost"
+								size="icon"
+								disabled={!inputValue.trim()}
+								onClick={handleSave}
+								data-testid="save-rename-button">
+								<span className="codicon codicon-check" />
+							</Button>
+						</StandardTooltip>
+						<StandardTooltip content={t("settings:common.cancel")}>
+							<Button
+								variant="ghost"
+								size="icon"
+								onClick={handleCancel}
+								data-testid="cancel-rename-button">
+								<span className="codicon codicon-close" />
+							</Button>
+						</StandardTooltip>
 					</div>
 					{error && (
-						<p className="text-red-500 text-sm mt-2" data-testid="error-message">
+						<div className="text-vscode-descriptionForeground text-sm mt-1" data-testid="error-message">
 							{error}
-						</p>
+						</div>
 					)}
 				</div>
 			) : (
 				<>
-					<div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-						<Dropdown
-							id="config-profile"
+					<div className="flex items-center gap-1">
+						<SearchableSelect
 							value={currentApiConfigName}
-							onChange={(value: unknown) => {
-								onSelectConfig((value as DropdownOption).value)
-							}}
-							role="combobox"
-							options={listApiConfigMeta.map((config) => ({
-								value: config.name,
-								label: config.name,
-							}))}
-							className="w-full"
+							onValueChange={handleSelectConfig}
+							options={listApiConfigMeta.map((config) => {
+								const valid = isProfileValid(config)
+								return {
+									value: config.name,
+									label: config.name,
+									disabled: !valid,
+									icon: !valid ? (
+										<StandardTooltip content={t("settings:validation.profileInvalid")}>
+											<span>
+												<AlertTriangle size={16} className="mr-2 text-vscode-errorForeground" />
+											</span>
+										</StandardTooltip>
+									) : undefined,
+								} as SearchableSelectOption
+							})}
+							placeholder={t("settings:common.select")}
+							searchPlaceholder={t("settings:providers.searchPlaceholder")}
+							emptyMessage={t("settings:providers.noMatchFound")}
+							className="grow"
+							data-testid="select-component"
 						/>
-						<VSCodeButton
-							appearance="icon"
-							onClick={handleAdd}
-							title="Add profile"
-							style={{
-								padding: 0,
-								margin: 0,
-								height: "28px",
-								width: "28px",
-								minWidth: "28px",
-							}}>
-							<span className="codicon codicon-add" />
-						</VSCodeButton>
+						<StandardTooltip content={t("settings:providers.addProfile")}>
+							<Button variant="ghost" size="icon" onClick={handleAdd} data-testid="add-profile-button">
+								<span className="codicon codicon-add" />
+							</Button>
+						</StandardTooltip>
 						{currentApiConfigName && (
 							<>
-								<VSCodeButton
-									appearance="icon"
-									onClick={handleStartRename}
-									title="Rename profile"
-									style={{
-										padding: 0,
-										margin: 0,
-										height: "28px",
-										width: "28px",
-										minWidth: "28px",
-									}}>
-									<span className="codicon codicon-edit" />
-								</VSCodeButton>
-								<VSCodeButton
-									appearance="icon"
-									onClick={handleDelete}
-									title={isOnlyProfile ? "Cannot delete the only profile" : "Delete profile"}
-									disabled={isOnlyProfile}
-									style={{
-										padding: 0,
-										margin: 0,
-										height: "28px",
-										width: "28px",
-										minWidth: "28px",
-									}}>
-									<span className="codicon codicon-trash" />
-								</VSCodeButton>
+								<StandardTooltip content={t("settings:providers.renameProfile")}>
+									<Button
+										variant="ghost"
+										size="icon"
+										onClick={handleStartRename}
+										data-testid="rename-profile-button">
+										<span className="codicon codicon-edit" />
+									</Button>
+								</StandardTooltip>
+								<StandardTooltip
+									content={
+										isOnlyProfile
+											? t("settings:providers.cannotDeleteOnlyProfile")
+											: t("settings:providers.deleteProfile")
+									}>
+									<Button
+										variant="ghost"
+										size="icon"
+										onClick={handleDelete}
+										data-testid="delete-profile-button"
+										disabled={isOnlyProfile}>
+										<span className="codicon codicon-trash" />
+									</Button>
+								</StandardTooltip>
 							</>
 						)}
 					</div>
-					<p
-						style={{
-							fontSize: "12px",
-							margin: "5px 0 12px",
-							color: "var(--vscode-descriptionForeground)",
-						}}>
-						Save different API configurations to quickly switch between providers and settings.
-					</p>
+					<div className="text-vscode-descriptionForeground text-sm mt-1">
+						{t("settings:providers.description")}
+					</div>
 				</>
 			)}
 
@@ -289,8 +310,8 @@ const ApiConfigManager = ({
 					}
 				}}
 				aria-labelledby="new-profile-title">
-				<DialogContent className="p-4 max-w-sm">
-					<DialogTitle>New Configuration Profile</DialogTitle>
+				<DialogContent className="p-4 max-w-sm bg-card">
+					<DialogTitle>{t("settings:providers.newProfile")}</DialogTitle>
 					<Input
 						ref={newProfileInputRef}
 						value={newProfileName}
@@ -299,7 +320,8 @@ const ApiConfigManager = ({
 							setNewProfileName(target.target.value)
 							setError(null)
 						}}
-						placeholder="Enter profile name"
+						placeholder={t("settings:providers.enterProfileName")}
+						data-testid="new-profile-input"
 						style={{ width: "100%" }}
 						onKeyDown={(e: unknown) => {
 							const event = e as { key: string }
@@ -311,16 +333,20 @@ const ApiConfigManager = ({
 						}}
 					/>
 					{error && (
-						<p className="text-red-500 text-sm mt-2" data-testid="error-message">
+						<p className="text-vscode-errorForeground text-sm mt-2" data-testid="error-message">
 							{error}
 						</p>
 					)}
 					<div className="flex justify-end gap-2 mt-4">
-						<Button variant="secondary" onClick={resetCreateState}>
-							Cancel
+						<Button variant="secondary" onClick={resetCreateState} data-testid="cancel-new-profile-button">
+							{t("settings:common.cancel")}
 						</Button>
-						<Button variant="default" disabled={!newProfileName.trim()} onClick={handleNewProfileSave}>
-							Create Profile
+						<Button
+							variant="primary"
+							disabled={!newProfileName.trim()}
+							onClick={handleNewProfileSave}
+							data-testid="create-profile-button">
+							{t("settings:providers.createProfile")}
 						</Button>
 					</div>
 				</DialogContent>

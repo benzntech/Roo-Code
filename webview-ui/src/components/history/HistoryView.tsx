@@ -1,18 +1,25 @@
 import React, { memo, useState } from "react"
 import { DeleteTaskDialog } from "./DeleteTaskDialog"
-import prettyBytes from "pretty-bytes"
+import { BatchDeleteTaskDialog } from "./BatchDeleteTaskDialog"
 import { Virtuoso } from "react-virtuoso"
-import { VSCodeButton, VSCodeTextField, VSCodeRadioGroup, VSCodeRadio } from "@vscode/webview-ui-toolkit/react"
 
-import { vscode } from "@/utils/vscode"
-import { formatLargeNumber, formatDate } from "@/utils/format"
-import { cn } from "@/lib/utils"
-import { Button } from "@/components/ui"
+import { VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
+
+import {
+	Button,
+	Checkbox,
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+	StandardTooltip,
+} from "@/components/ui"
+import { useAppTranslation } from "@/i18n/TranslationContext"
 
 import { Tab, TabContent, TabHeader } from "../common/Tab"
 import { useTaskSearch } from "./useTaskSearch"
-import { ExportButton } from "./ExportButton"
-import { CopyButton } from "./CopyButton"
+import TaskItem from "./TaskItem"
 
 type HistoryViewProps = {
 	onDone: () => void
@@ -21,22 +28,87 @@ type HistoryViewProps = {
 type SortOption = "newest" | "oldest" | "mostExpensive" | "mostTokens" | "mostRelevant"
 
 const HistoryView = ({ onDone }: HistoryViewProps) => {
-	const { tasks, searchQuery, setSearchQuery, sortOption, setSortOption, setLastNonRelevantSort } = useTaskSearch()
+	const {
+		tasks,
+		searchQuery,
+		setSearchQuery,
+		sortOption,
+		setSortOption,
+		setLastNonRelevantSort,
+		showAllWorkspaces,
+		setShowAllWorkspaces,
+	} = useTaskSearch()
+	const { t } = useAppTranslation()
 
 	const [deleteTaskId, setDeleteTaskId] = useState<string | null>(null)
+	const [isSelectionMode, setIsSelectionMode] = useState(false)
+	const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([])
+	const [showBatchDeleteDialog, setShowBatchDeleteDialog] = useState<boolean>(false)
+
+	// Toggle selection mode
+	const toggleSelectionMode = () => {
+		setIsSelectionMode(!isSelectionMode)
+		if (isSelectionMode) {
+			setSelectedTaskIds([])
+		}
+	}
+
+	// Toggle selection for a single task
+	const toggleTaskSelection = (taskId: string, isSelected: boolean) => {
+		if (isSelected) {
+			setSelectedTaskIds((prev) => [...prev, taskId])
+		} else {
+			setSelectedTaskIds((prev) => prev.filter((id) => id !== taskId))
+		}
+	}
+
+	// Toggle select all tasks
+	const toggleSelectAll = (selectAll: boolean) => {
+		if (selectAll) {
+			setSelectedTaskIds(tasks.map((task) => task.id))
+		} else {
+			setSelectedTaskIds([])
+		}
+	}
+
+	// Handle batch delete button click
+	const handleBatchDelete = () => {
+		if (selectedTaskIds.length > 0) {
+			setShowBatchDeleteDialog(true)
+		}
+	}
 
 	return (
 		<Tab>
 			<TabHeader className="flex flex-col gap-2">
 				<div className="flex justify-between items-center">
-					<h3 className="text-vscode-foreground m-0">History</h3>
-					<VSCodeButton onClick={onDone}>Done</VSCodeButton>
+					<h3 className="text-vscode-foreground m-0">{t("history:history")}</h3>
+					<div className="flex gap-2">
+						<StandardTooltip
+							content={
+								isSelectionMode
+									? `${t("history:exitSelectionMode")}`
+									: `${t("history:enterSelectionMode")}`
+							}>
+							<Button
+								variant={isSelectionMode ? "primary" : "secondary"}
+								onClick={toggleSelectionMode}
+								data-testid="toggle-selection-mode-button">
+								<span
+									className={`codicon ${isSelectionMode ? "codicon-check-all" : "codicon-checklist"} mr-1`}
+								/>
+								{isSelectionMode ? t("history:exitSelection") : t("history:selectionMode")}
+							</Button>
+						</StandardTooltip>
+						<Button onClick={onDone}>{t("history:done")}</Button>
+					</div>
 				</div>
 				<div className="flex flex-col gap-2">
 					<VSCodeTextField
-						style={{ width: "100%" }}
-						placeholder="Fuzzy search history..."
+						className="w-full"
+						placeholder={t("history:searchPlaceholder")}
 						value={searchQuery}
+						data-testid="history-search-input"
 						onInput={(e) => {
 							const newValue = (e.target as HTMLInputElement)?.value
 							setSearchQuery(newValue)
@@ -45,279 +117,173 @@ const HistoryView = ({ onDone }: HistoryViewProps) => {
 								setSortOption("mostRelevant")
 							}
 						}}>
-						<div
-							slot="start"
-							className="codicon codicon-search"
-							style={{ fontSize: 13, marginTop: 2.5, opacity: 0.8 }}
-						/>
+						<div slot="start" className="codicon codicon-search mt-0.5 opacity-80 text-sm!" />
 						{searchQuery && (
 							<div
-								className="input-icon-button codicon codicon-close"
+								className="input-icon-button codicon codicon-close flex justify-center items-center h-full"
 								aria-label="Clear search"
 								onClick={() => setSearchQuery("")}
 								slot="end"
-								style={{
-									display: "flex",
-									justifyContent: "center",
-									alignItems: "center",
-									height: "100%",
-								}}
 							/>
 						)}
 					</VSCodeTextField>
-					<VSCodeRadioGroup
-						style={{ display: "flex", flexWrap: "wrap" }}
-						value={sortOption}
-						role="radiogroup"
-						onChange={(e) => setSortOption((e.target as HTMLInputElement).value as SortOption)}>
-						<VSCodeRadio value="newest">Newest</VSCodeRadio>
-						<VSCodeRadio value="oldest">Oldest</VSCodeRadio>
-						<VSCodeRadio value="mostExpensive">Most Expensive</VSCodeRadio>
-						<VSCodeRadio value="mostTokens">Most Tokens</VSCodeRadio>
-						<VSCodeRadio
-							value="mostRelevant"
-							disabled={!searchQuery}
-							style={{ opacity: searchQuery ? 1 : 0.5 }}>
-							Most Relevant
-						</VSCodeRadio>
-					</VSCodeRadioGroup>
+					<div className="flex gap-2">
+						<Select
+							value={showAllWorkspaces ? "all" : "current"}
+							onValueChange={(value) => setShowAllWorkspaces(value === "all")}>
+							<SelectTrigger className="flex-1">
+								<SelectValue>
+									{t("history:workspace.prefix")}{" "}
+									{t(`history:workspace.${showAllWorkspaces ? "all" : "current"}`)}
+								</SelectValue>
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="current">
+									<div className="flex items-center gap-2">
+										<span className="codicon codicon-folder" />
+										{t("history:workspace.current")}
+									</div>
+								</SelectItem>
+								<SelectItem value="all">
+									<div className="flex items-center gap-2">
+										<span className="codicon codicon-folder-opened" />
+										{t("history:workspace.all")}
+									</div>
+								</SelectItem>
+							</SelectContent>
+						</Select>
+						<Select value={sortOption} onValueChange={(value) => setSortOption(value as SortOption)}>
+							<SelectTrigger className="flex-1">
+								<SelectValue>
+									{t("history:sort.prefix")} {t(`history:sort.${sortOption}`)}
+								</SelectValue>
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="newest" data-testid="select-newest">
+									<div className="flex items-center gap-2">
+										<span className="codicon codicon-arrow-down" />
+										{t("history:newest")}
+									</div>
+								</SelectItem>
+								<SelectItem value="oldest" data-testid="select-oldest">
+									<div className="flex items-center gap-2">
+										<span className="codicon codicon-arrow-up" />
+										{t("history:oldest")}
+									</div>
+								</SelectItem>
+								<SelectItem value="mostExpensive" data-testid="select-most-expensive">
+									<div className="flex items-center gap-2">
+										<span className="codicon codicon-credit-card" />
+										{t("history:mostExpensive")}
+									</div>
+								</SelectItem>
+								<SelectItem value="mostTokens" data-testid="select-most-tokens">
+									<div className="flex items-center gap-2">
+										<span className="codicon codicon-symbol-numeric" />
+										{t("history:mostTokens")}
+									</div>
+								</SelectItem>
+								<SelectItem
+									value="mostRelevant"
+									disabled={!searchQuery}
+									data-testid="select-most-relevant">
+									<div className="flex items-center gap-2">
+										<span className="codicon codicon-search" />
+										{t("history:mostRelevant")}
+									</div>
+								</SelectItem>
+							</SelectContent>
+						</Select>
+					</div>
+
+					{/* Select all control in selection mode */}
+					{isSelectionMode && tasks.length > 0 && (
+						<div className="flex items-center py-1">
+							<div className="flex items-center gap-2">
+								<Checkbox
+									checked={tasks.length > 0 && selectedTaskIds.length === tasks.length}
+									onCheckedChange={(checked) => toggleSelectAll(checked === true)}
+									variant="description"
+								/>
+								<span className="text-vscode-foreground">
+									{selectedTaskIds.length === tasks.length
+										? t("history:deselectAll")
+										: t("history:selectAll")}
+								</span>
+								<span className="ml-auto text-vscode-descriptionForeground text-xs">
+									{t("history:selectedItems", {
+										selected: selectedTaskIds.length,
+										total: tasks.length,
+									})}
+								</span>
+							</div>
+						</div>
+					)}
 				</div>
 			</TabHeader>
 
-			<TabContent className="p-0">
+			<TabContent className="px-2 py-0">
 				<Virtuoso
-					style={{
-						flexGrow: 1,
-						overflowY: "scroll",
-					}}
+					className="flex-1 overflow-y-scroll"
 					data={tasks}
 					data-testid="virtuoso-container"
+					initialTopMostItemIndex={0}
 					components={{
 						List: React.forwardRef((props, ref) => (
 							<div {...props} ref={ref} data-testid="virtuoso-item-list" />
 						)),
 					}}
-					itemContent={(index, item) => (
-						<div
-							data-testid={`task-item-${item.id}`}
+					itemContent={(_index, item) => (
+						<TaskItem
 							key={item.id}
-							className={cn("cursor-pointer", {
-								"border-b border-vscode-panel-border": index < tasks.length - 1,
-							})}
-							onClick={() => vscode.postMessage({ type: "showTaskWithId", text: item.id })}>
-							<div
-								style={{
-									display: "flex",
-									flexDirection: "column",
-									gap: "8px",
-									padding: "12px 20px",
-									position: "relative",
-								}}>
-								<div
-									style={{
-										display: "flex",
-										justifyContent: "space-between",
-										alignItems: "center",
-									}}>
-									<span
-										style={{
-											color: "var(--vscode-descriptionForeground)",
-											fontWeight: 500,
-											fontSize: "0.85em",
-											textTransform: "uppercase",
-										}}>
-										{formatDate(item.ts)}
-									</span>
-									<div className="flex flex-row">
-										<Button
-											variant="ghost"
-											size="sm"
-											title="Delete Task (Shift + Click to skip confirmation)"
-											onClick={(e) => {
-												e.stopPropagation()
-
-												if (e.shiftKey) {
-													vscode.postMessage({ type: "deleteTaskWithId", text: item.id })
-												} else {
-													setDeleteTaskId(item.id)
-												}
-											}}>
-											<span className="codicon codicon-trash" />
-											{item.size && prettyBytes(item.size)}
-										</Button>
-									</div>
-								</div>
-								<div
-									style={{
-										fontSize: "var(--vscode-font-size)",
-										color: "var(--vscode-foreground)",
-										display: "-webkit-box",
-										WebkitLineClamp: 3,
-										WebkitBoxOrient: "vertical",
-										overflow: "hidden",
-										whiteSpace: "pre-wrap",
-										wordBreak: "break-word",
-										overflowWrap: "anywhere",
-									}}
-									dangerouslySetInnerHTML={{ __html: item.task }}
-								/>
-								<div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-									<div
-										data-testid="tokens-container"
-										style={{
-											display: "flex",
-											justifyContent: "space-between",
-											alignItems: "center",
-										}}>
-										<div
-											style={{
-												display: "flex",
-												alignItems: "center",
-												gap: "4px",
-												flexWrap: "wrap",
-											}}>
-											<span
-												style={{
-													fontWeight: 500,
-													color: "var(--vscode-descriptionForeground)",
-												}}>
-												Tokens:
-											</span>
-											<span
-												data-testid="tokens-in"
-												style={{
-													display: "flex",
-													alignItems: "center",
-													gap: "3px",
-													color: "var(--vscode-descriptionForeground)",
-												}}>
-												<i
-													className="codicon codicon-arrow-up"
-													style={{
-														fontSize: "12px",
-														fontWeight: "bold",
-														marginBottom: "-2px",
-													}}
-												/>
-												{formatLargeNumber(item.tokensIn || 0)}
-											</span>
-											<span
-												data-testid="tokens-out"
-												style={{
-													display: "flex",
-													alignItems: "center",
-													gap: "3px",
-													color: "var(--vscode-descriptionForeground)",
-												}}>
-												<i
-													className="codicon codicon-arrow-down"
-													style={{
-														fontSize: "12px",
-														fontWeight: "bold",
-														marginBottom: "-2px",
-													}}
-												/>
-												{formatLargeNumber(item.tokensOut || 0)}
-											</span>
-										</div>
-										{!item.totalCost && (
-											<div className="flex flex-row gap-1">
-												<CopyButton itemTask={item.task} />
-												<ExportButton itemId={item.id} />
-											</div>
-										)}
-									</div>
-
-									{!!item.cacheWrites && (
-										<div
-											data-testid="cache-container"
-											style={{
-												display: "flex",
-												alignItems: "center",
-												gap: "4px",
-												flexWrap: "wrap",
-											}}>
-											<span
-												style={{
-													fontWeight: 500,
-													color: "var(--vscode-descriptionForeground)",
-												}}>
-												Cache:
-											</span>
-											<span
-												data-testid="cache-writes"
-												style={{
-													display: "flex",
-													alignItems: "center",
-													gap: "3px",
-													color: "var(--vscode-descriptionForeground)",
-												}}>
-												<i
-													className="codicon codicon-database"
-													style={{
-														fontSize: "12px",
-														fontWeight: "bold",
-														marginBottom: "-1px",
-													}}
-												/>
-												+{formatLargeNumber(item.cacheWrites || 0)}
-											</span>
-											<span
-												data-testid="cache-reads"
-												style={{
-													display: "flex",
-													alignItems: "center",
-													gap: "3px",
-													color: "var(--vscode-descriptionForeground)",
-												}}>
-												<i
-													className="codicon codicon-arrow-right"
-													style={{
-														fontSize: "12px",
-														fontWeight: "bold",
-														marginBottom: 0,
-													}}
-												/>
-												{formatLargeNumber(item.cacheReads || 0)}
-											</span>
-										</div>
-									)}
-
-									{!!item.totalCost && (
-										<div
-											style={{
-												display: "flex",
-												justifyContent: "space-between",
-												alignItems: "center",
-												marginTop: -2,
-											}}>
-											<div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-												<span
-													style={{
-														fontWeight: 500,
-														color: "var(--vscode-descriptionForeground)",
-													}}>
-													API Cost:
-												</span>
-												<span style={{ color: "var(--vscode-descriptionForeground)" }}>
-													${item.totalCost?.toFixed(4)}
-												</span>
-											</div>
-											<div className="flex flex-row gap-1">
-												<CopyButton itemTask={item.task} />
-												<ExportButton itemId={item.id} />
-											</div>
-										</div>
-									)}
-								</div>
-							</div>
-						</div>
+							item={item}
+							variant="full"
+							showWorkspace={showAllWorkspaces}
+							isSelectionMode={isSelectionMode}
+							isSelected={selectedTaskIds.includes(item.id)}
+							onToggleSelection={toggleTaskSelection}
+							onDelete={setDeleteTaskId}
+							className="m-2"
+						/>
 					)}
 				/>
 			</TabContent>
 
+			{/* Fixed action bar at bottom - only shown in selection mode with selected items */}
+			{isSelectionMode && selectedTaskIds.length > 0 && (
+				<div className="fixed bottom-0 left-0 right-2 bg-vscode-editor-background border-t border-vscode-panel-border p-2 flex justify-between items-center">
+					<div className="text-vscode-foreground">
+						{t("history:selectedItems", { selected: selectedTaskIds.length, total: tasks.length })}
+					</div>
+					<div className="flex gap-2">
+						<Button variant="secondary" onClick={() => setSelectedTaskIds([])}>
+							{t("history:clearSelection")}
+						</Button>
+						<Button variant="primary" onClick={handleBatchDelete}>
+							{t("history:deleteSelected")}
+						</Button>
+					</div>
+				</div>
+			)}
+
+			{/* Delete dialog */}
 			{deleteTaskId && (
 				<DeleteTaskDialog taskId={deleteTaskId} onOpenChange={(open) => !open && setDeleteTaskId(null)} open />
+			)}
+
+			{/* Batch delete dialog */}
+			{showBatchDeleteDialog && (
+				<BatchDeleteTaskDialog
+					taskIds={selectedTaskIds}
+					open={showBatchDeleteDialog}
+					onOpenChange={(open) => {
+						if (!open) {
+							setShowBatchDeleteDialog(false)
+							setSelectedTaskIds([])
+							setIsSelectionMode(false)
+						}
+					}}
+				/>
 			)}
 		</Tab>
 	)

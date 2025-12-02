@@ -1,64 +1,106 @@
 import { Anthropic } from "@anthropic-ai/sdk"
-import { ApiHandler } from ".."
-import { ModelInfo } from "../../shared/api"
-import { ApiStream } from "../transform/stream"
-import { Tiktoken } from "js-tiktoken/lite"
-import o200kBase from "js-tiktoken/ranks/o200k_base"
 
-// Reuse the fudge factor used in the original code
-const TOKEN_FUDGE_FACTOR = 1.5
+import type { ModelInfo } from "@roo-code/types"
+
+import type { ApiHandler, ApiHandlerCreateMessageMetadata } from "../index"
+import { ApiStream } from "../transform/stream"
+import { countTokens } from "../../utils/countTokens"
 
 /**
- * Base class for API providers that implements common functionality
+ * Base class for API providers that implements common functionality.
  */
 export abstract class BaseProvider implements ApiHandler {
-	// Cache the Tiktoken encoder instance since it's stateless
-	private encoder: Tiktoken | null = null
-	abstract createMessage(systemPrompt: string, messages: Anthropic.Messages.MessageParam[]): ApiStream
+	abstract createMessage(
+		systemPrompt: string,
+		messages: Anthropic.Messages.MessageParam[],
+		metadata?: ApiHandlerCreateMessageMetadata,
+	): ApiStream
+
 	abstract getModel(): { id: string; info: ModelInfo }
 
 	/**
-	 * Default token counting implementation using tiktoken
-	 * Providers can override this to use their native token counting endpoints
+	 * Converts an array of tools to be compatible with OpenAI's strict mode.
+	 * Filters for function tools, applies schema conversion to their parameters,
+	 * and ensures all tools have consistent strict: true values.
+	 */
+	protected convertToolsForOpenAI(tools: any[] | undefined): any[] | undefined {
+		if (!tools) {
+			return undefined
+		}
+
+		return tools.map((tool) =>
+			tool.type === "function"
+				? {
+						...tool,
+						function: {
+							...tool.function,
+							strict: true,
+							parameters: this.convertToolSchemaForOpenAI(tool.function.parameters),
+						},
+					}
+				: tool,
+		)
+	}
+
+	/**
+	 * Converts tool schemas to be compatible with OpenAI's strict mode by:
+	 * - Ensuring all properties are in the required array (strict mode requirement)
+	 * - Converting nullable types (["type", "null"]) to non-nullable ("type")
+	 * - Recursively processing nested objects and arrays
 	 *
-	 * Uses a cached Tiktoken encoder instance for performance since it's stateless.
-	 * The encoder is created lazily on first use and reused for subsequent calls.
+	 * This matches the behavior of ensureAllRequired in openai-native.ts
+	 */
+	protected convertToolSchemaForOpenAI(schema: any): any {
+		if (!schema || typeof schema !== "object" || schema.type !== "object") {
+			return schema
+		}
+
+		const result = { ...schema }
+
+		if (result.properties) {
+			const allKeys = Object.keys(result.properties)
+			// OpenAI strict mode requires ALL properties to be in required array
+			result.required = allKeys
+
+			// Recursively process nested objects and convert nullable types
+			const newProps = { ...result.properties }
+			for (const key of allKeys) {
+				const prop = newProps[key]
+
+				// Handle nullable types by removing null
+				if (prop && Array.isArray(prop.type) && prop.type.includes("null")) {
+					const nonNullTypes = prop.type.filter((t: string) => t !== "null")
+					prop.type = nonNullTypes.length === 1 ? nonNullTypes[0] : nonNullTypes
+				}
+
+				// Recursively process nested objects
+				if (prop && prop.type === "object") {
+					newProps[key] = this.convertToolSchemaForOpenAI(prop)
+				} else if (prop && prop.type === "array" && prop.items?.type === "object") {
+					newProps[key] = {
+						...prop,
+						items: this.convertToolSchemaForOpenAI(prop.items),
+					}
+				}
+			}
+			result.properties = newProps
+		}
+
+		return result
+	}
+
+	/**
+	 * Default token counting implementation using tiktoken.
+	 * Providers can override this to use their native token counting endpoints.
 	 *
 	 * @param content The content to count tokens for
 	 * @returns A promise resolving to the token count
 	 */
-	async countTokens(content: Array<Anthropic.Messages.ContentBlockParam>): Promise<number> {
-		if (!content || content.length === 0) return 0
-
-		let totalTokens = 0
-
-		// Lazily create and cache the encoder if it doesn't exist
-		if (!this.encoder) {
-			this.encoder = new Tiktoken(o200kBase)
+	async countTokens(content: Anthropic.Messages.ContentBlockParam[]): Promise<number> {
+		if (content.length === 0) {
+			return 0
 		}
 
-		// Process each content block using the cached encoder
-		for (const block of content) {
-			if (block.type === "text") {
-				// Use tiktoken for text token counting
-				const text = block.text || ""
-				if (text.length > 0) {
-					const tokens = this.encoder.encode(text)
-					totalTokens += tokens.length
-				}
-			} else if (block.type === "image") {
-				// For images, calculate based on data size
-				const imageSource = block.source
-				if (imageSource && typeof imageSource === "object" && "data" in imageSource) {
-					const base64Data = imageSource.data as string
-					totalTokens += Math.ceil(Math.sqrt(base64Data.length))
-				} else {
-					totalTokens += 300 // Conservative estimate for unknown images
-				}
-			}
-		}
-
-		// Add a fudge factor to account for the fact that tiktoken is not always accurate
-		return Math.ceil(totalTokens * TOKEN_FUDGE_FACTOR)
+		return countTokens(content, { useWorker: true })
 	}
 }

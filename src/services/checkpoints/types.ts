@@ -1,4 +1,4 @@
-import { CommitResult, SimpleGit } from "simple-git"
+import { CommitResult } from "simple-git"
 
 export type CheckpointResult = Partial<CommitResult> & Pick<CommitResult, "commit">
 
@@ -25,10 +25,10 @@ export interface CheckpointEventMap {
 	initialize: { type: "initialize"; workspaceDir: string; baseHash: string; created: boolean; duration: number }
 	checkpoint: {
 		type: "checkpoint"
-		isFirst: boolean
 		fromHash: string
 		toHash: string
 		duration: number
+		suppressMessage?: boolean
 	}
 	restore: { type: "restore"; commitHash: string; duration: number }
 	error: { type: "error"; error: Error }

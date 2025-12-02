@@ -1,17 +1,26 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import { Stream as AnthropicStream } from "@anthropic-ai/sdk/streaming"
 import { CacheControlEphemeral } from "@anthropic-ai/sdk/resources"
+import OpenAI from "openai"
+
 import {
+	type ModelInfo,
+	type AnthropicModelId,
 	anthropicDefaultModelId,
-	AnthropicModelId,
 	anthropicModels,
-	ApiHandlerOptions,
-	ModelInfo,
-} from "../../shared/api"
+	ANTHROPIC_DEFAULT_MAX_TOKENS,
+} from "@roo-code/types"
+
+import type { ApiHandlerOptions } from "../../shared/api"
+
 import { ApiStream } from "../transform/stream"
+import { getModelParams } from "../transform/model-params"
+import { filterNonAnthropicBlocks } from "../transform/anthropic-filter"
+
 import { BaseProvider } from "./base-provider"
-import { ANTHROPIC_DEFAULT_MAX_TOKENS } from "./constants"
-import { SingleCompletionHandler, getModelParams } from "../index"
+import type { SingleCompletionHandler, ApiHandlerCreateMessageMetadata } from "../index"
+import { calculateApiCostAnthropic } from "../../shared/cost"
+import { convertOpenAIToolsToAnthropic } from "../../core/prompts/tools/native-tools/converters"
 
 export class AnthropicHandler extends BaseProvider implements SingleCompletionHandler {
 	private options: ApiHandlerOptions
@@ -20,28 +29,80 @@ export class AnthropicHandler extends BaseProvider implements SingleCompletionHa
 	constructor(options: ApiHandlerOptions) {
 		super()
 		this.options = options
+
+		const apiKeyFieldName =
+			this.options.anthropicBaseUrl && this.options.anthropicUseAuthToken ? "authToken" : "apiKey"
+
 		this.client = new Anthropic({
-			apiKey: this.options.apiKey,
 			baseURL: this.options.anthropicBaseUrl || undefined,
+			[apiKeyFieldName]: this.options.apiKey,
 		})
 	}
 
-	async *createMessage(systemPrompt: string, messages: Anthropic.Messages.MessageParam[]): ApiStream {
+	async *createMessage(
+		systemPrompt: string,
+		messages: Anthropic.Messages.MessageParam[],
+		metadata?: ApiHandlerCreateMessageMetadata,
+	): ApiStream {
 		let stream: AnthropicStream<Anthropic.Messages.RawMessageStreamEvent>
 		const cacheControl: CacheControlEphemeral = { type: "ephemeral" }
-		let { id: modelId, maxTokens, thinking, temperature, virtualId } = this.getModel()
+		let {
+			id: modelId,
+			betas = ["fine-grained-tool-streaming-2025-05-14"],
+			maxTokens,
+			temperature,
+			reasoning: thinking,
+		} = this.getModel()
+
+		// Filter out non-Anthropic blocks (reasoning, thoughtSignature, etc.) before sending to the API
+		const sanitizedMessages = filterNonAnthropicBlocks(messages)
+
+		// Add 1M context beta flag if enabled for Claude Sonnet 4 and 4.5
+		if (
+			(modelId === "claude-sonnet-4-20250514" || modelId === "claude-sonnet-4-5") &&
+			this.options.anthropicBeta1MContext
+		) {
+			betas.push("context-1m-2025-08-07")
+		}
+
+		// Prepare native tool parameters if tools are provided and protocol is not XML
+		// Also exclude tools when tool_choice is "none" since that means "don't use tools"
+		const shouldIncludeNativeTools =
+			metadata?.tools &&
+			metadata.tools.length > 0 &&
+			metadata?.toolProtocol !== "xml" &&
+			metadata?.tool_choice !== "none"
+
+		const nativeToolParams = shouldIncludeNativeTools
+			? {
+					tools: convertOpenAIToolsToAnthropic(metadata.tools!),
+					tool_choice: this.convertOpenAIToolChoice(metadata.tool_choice, metadata.parallelToolCalls),
+				}
+			: {}
 
 		switch (modelId) {
+			case "claude-sonnet-4-5":
+			case "claude-sonnet-4-20250514":
+			case "claude-opus-4-5-20251101":
+			case "claude-opus-4-1-20250805":
+			case "claude-opus-4-20250514":
 			case "claude-3-7-sonnet-20250219":
 			case "claude-3-5-sonnet-20241022":
 			case "claude-3-5-haiku-20241022":
 			case "claude-3-opus-20240229":
+			case "claude-haiku-4-5-20251001":
 			case "claude-3-haiku-20240307": {
 				/**
-				 * The latest message will be the new user message, one before will
-				 * be the assistant message from a previous request, and the user message before that will be a previously cached user message. So we need to mark the latest user message as ephemeral to cache it for the next request, and mark the second to last user message as ephemeral to let the server know the last message to retrieve from the cache for the current request..
+				 * The latest message will be the new user message, one before
+				 * will be the assistant message from a previous request, and
+				 * the user message before that will be a previously cached user
+				 * message. So we need to mark the latest user message as
+				 * ephemeral to cache it for the next request, and mark the
+				 * second to last user message as ephemeral to let the server
+				 * know the last message to retrieve from the cache for the
+				 * current request.
 				 */
-				const userMsgIndices = messages.reduce(
+				const userMsgIndices = sanitizedMessages.reduce(
 					(acc, msg, index) => (msg.role === "user" ? [...acc, index] : acc),
 					[] as number[],
 				)
@@ -57,7 +118,7 @@ export class AnthropicHandler extends BaseProvider implements SingleCompletionHa
 						thinking,
 						// Setting cache breakpoint for system prompt so new tasks can reuse it.
 						system: [{ text: systemPrompt, type: "text", cache_control: cacheControl }],
-						messages: messages.map((message, index) => {
+						messages: sanitizedMessages.map((message, index) => {
 							if (index === lastUserMsgIndex || index === secondLastMsgUserIndex) {
 								return {
 									...message,
@@ -73,34 +134,29 @@ export class AnthropicHandler extends BaseProvider implements SingleCompletionHa
 							}
 							return message
 						}),
-						// tools, // cache breakpoints go from tools > system > messages, and since tools dont change, we can just set the breakpoint at the end of system (this avoids having to set a breakpoint at the end of tools which by itself does not meet min requirements for haiku caching)
-						// tool_choice: { type: "auto" },
-						// tools: tools,
 						stream: true,
+						...nativeToolParams,
 					},
 					(() => {
 						// prompt caching: https://x.com/alexalbert__/status/1823751995901272068
 						// https://github.com/anthropics/anthropic-sdk-typescript?tab=readme-ov-file#default-headers
 						// https://github.com/anthropics/anthropic-sdk-typescript/commit/c920b77fc67bd839bfeb6716ceab9d7c9bbe7393
 
-						const betas = []
-
-						// Check for the thinking-128k variant first
-						if (virtualId === "claude-3-7-sonnet-20250219:thinking") {
-							betas.push("output-128k-2025-02-19")
-						}
-
 						// Then check for models that support prompt caching
 						switch (modelId) {
+							case "claude-sonnet-4-5":
+							case "claude-sonnet-4-20250514":
+							case "claude-opus-4-5-20251101":
+							case "claude-opus-4-1-20250805":
+							case "claude-opus-4-20250514":
 							case "claude-3-7-sonnet-20250219":
 							case "claude-3-5-sonnet-20241022":
 							case "claude-3-5-haiku-20241022":
 							case "claude-3-opus-20240229":
+							case "claude-haiku-4-5-20251001":
 							case "claude-3-haiku-20240307":
 								betas.push("prompt-caching-2024-07-31")
-								return {
-									headers: { "anthropic-beta": betas.join(",") },
-								}
+								return { headers: { "anthropic-beta": betas.join(",") } }
 							default:
 								return undefined
 						}
@@ -114,30 +170,45 @@ export class AnthropicHandler extends BaseProvider implements SingleCompletionHa
 					max_tokens: maxTokens ?? ANTHROPIC_DEFAULT_MAX_TOKENS,
 					temperature,
 					system: [{ text: systemPrompt, type: "text" }],
-					messages,
-					// tools,
-					// tool_choice: { type: "auto" },
+					messages: sanitizedMessages,
 					stream: true,
+					...nativeToolParams,
 				})) as any
 				break
 			}
 		}
 
+		let inputTokens = 0
+		let outputTokens = 0
+		let cacheWriteTokens = 0
+		let cacheReadTokens = 0
+
 		for await (const chunk of stream) {
 			switch (chunk.type) {
-				case "message_start":
+				case "message_start": {
 					// Tells us cache reads/writes/input/output.
-					const usage = chunk.message.usage
+					const {
+						input_tokens = 0,
+						output_tokens = 0,
+						cache_creation_input_tokens,
+						cache_read_input_tokens,
+					} = chunk.message.usage
 
 					yield {
 						type: "usage",
-						inputTokens: usage.input_tokens || 0,
-						outputTokens: usage.output_tokens || 0,
-						cacheWriteTokens: usage.cache_creation_input_tokens || undefined,
-						cacheReadTokens: usage.cache_read_input_tokens || undefined,
+						inputTokens: input_tokens,
+						outputTokens: output_tokens,
+						cacheWriteTokens: cache_creation_input_tokens || undefined,
+						cacheReadTokens: cache_read_input_tokens || undefined,
 					}
 
+					inputTokens += input_tokens
+					outputTokens += output_tokens
+					cacheWriteTokens += cache_creation_input_tokens || 0
+					cacheReadTokens += cache_read_input_tokens || 0
+
 					break
+				}
 				case "message_delta":
 					// Tells us stop_reason, stop_sequence, and output tokens
 					// along the way and at the end of the message.
@@ -171,6 +242,17 @@ export class AnthropicHandler extends BaseProvider implements SingleCompletionHa
 
 							yield { type: "text", text: chunk.content_block.text }
 							break
+						case "tool_use": {
+							// Emit initial tool call partial with id and name
+							yield {
+								type: "tool_call_partial",
+								index: chunk.index,
+								id: chunk.content_block.id,
+								name: chunk.content_block.name,
+								arguments: undefined,
+							}
+							break
+						}
 					}
 					break
 				case "content_block_delta":
@@ -181,11 +263,43 @@ export class AnthropicHandler extends BaseProvider implements SingleCompletionHa
 						case "text_delta":
 							yield { type: "text", text: chunk.delta.text }
 							break
+						case "input_json_delta": {
+							// Emit tool call partial chunks as arguments stream in
+							yield {
+								type: "tool_call_partial",
+								index: chunk.index,
+								id: undefined,
+								name: undefined,
+								arguments: chunk.delta.partial_json,
+							}
+							break
+						}
 					}
 
 					break
 				case "content_block_stop":
+					// Block complete - no action needed for now.
+					// NativeToolCallParser handles tool call completion
+					// Note: Signature for multi-turn thinking would require using stream.finalMessage()
+					// after iteration completes, which requires restructuring the streaming approach.
 					break
+			}
+		}
+
+		if (inputTokens > 0 || outputTokens > 0 || cacheWriteTokens > 0 || cacheReadTokens > 0) {
+			const { totalCost } = calculateApiCostAnthropic(
+				this.getModel().info,
+				inputTokens,
+				outputTokens,
+				cacheWriteTokens,
+				cacheReadTokens,
+			)
+
+			yield {
+				type: "usage",
+				inputTokens: 0,
+				outputTokens: 0,
+				totalCost,
 			}
 		}
 	}
@@ -193,31 +307,91 @@ export class AnthropicHandler extends BaseProvider implements SingleCompletionHa
 	getModel() {
 		const modelId = this.options.apiModelId
 		let id = modelId && modelId in anthropicModels ? (modelId as AnthropicModelId) : anthropicDefaultModelId
-		const info: ModelInfo = anthropicModels[id]
+		let info: ModelInfo = anthropicModels[id]
 
-		// Track the original model ID for special variant handling
-		const virtualId = id
-
-		// The `:thinking` variant is a virtual identifier for the
-		// `claude-3-7-sonnet-20250219` model with a thinking budget.
-		// We can handle this more elegantly in the future.
-		if (id === "claude-3-7-sonnet-20250219:thinking") {
-			id = "claude-3-7-sonnet-20250219"
+		// If 1M context beta is enabled for Claude Sonnet 4 or 4.5, update the model info
+		if ((id === "claude-sonnet-4-20250514" || id === "claude-sonnet-4-5") && this.options.anthropicBeta1MContext) {
+			// Use the tier pricing for 1M context
+			const tier = info.tiers?.[0]
+			if (tier) {
+				info = {
+					...info,
+					contextWindow: tier.contextWindow,
+					inputPrice: tier.inputPrice,
+					outputPrice: tier.outputPrice,
+					cacheWritesPrice: tier.cacheWritesPrice,
+					cacheReadsPrice: tier.cacheReadsPrice,
+				}
+			}
 		}
 
+		const params = getModelParams({
+			format: "anthropic",
+			modelId: id,
+			model: info,
+			settings: this.options,
+		})
+
+		// The `:thinking` suffix indicates that the model is a "Hybrid"
+		// reasoning model and that reasoning is required to be enabled.
+		// The actual model ID honored by Anthropic's API does not have this
+		// suffix.
 		return {
-			id,
+			id: id === "claude-3-7-sonnet-20250219:thinking" ? "claude-3-7-sonnet-20250219" : id,
 			info,
-			virtualId, // Include the original ID to use for header selection
-			...getModelParams({ options: this.options, model: info, defaultMaxTokens: ANTHROPIC_DEFAULT_MAX_TOKENS }),
+			betas: id === "claude-3-7-sonnet-20250219:thinking" ? ["output-128k-2025-02-19"] : undefined,
+			...params,
 		}
 	}
 
+	/**
+	 * Converts OpenAI tool_choice to Anthropic ToolChoice format
+	 * @param toolChoice - OpenAI tool_choice parameter
+	 * @param parallelToolCalls - When true, allows parallel tool calls. When false (default), disables parallel tool calls.
+	 */
+	private convertOpenAIToolChoice(
+		toolChoice: OpenAI.Chat.ChatCompletionCreateParams["tool_choice"],
+		parallelToolCalls?: boolean,
+	): Anthropic.Messages.MessageCreateParams["tool_choice"] | undefined {
+		// Anthropic allows parallel tool calls by default. When parallelToolCalls is false or undefined,
+		// we disable parallel tool use to ensure one tool call at a time.
+		const disableParallelToolUse = !parallelToolCalls
+
+		if (!toolChoice) {
+			// Default to auto with parallel tool use control
+			return { type: "auto", disable_parallel_tool_use: disableParallelToolUse }
+		}
+
+		if (typeof toolChoice === "string") {
+			switch (toolChoice) {
+				case "none":
+					return undefined // Anthropic doesn't have "none", just omit tools
+				case "auto":
+					return { type: "auto", disable_parallel_tool_use: disableParallelToolUse }
+				case "required":
+					return { type: "any", disable_parallel_tool_use: disableParallelToolUse }
+				default:
+					return { type: "auto", disable_parallel_tool_use: disableParallelToolUse }
+			}
+		}
+
+		// Handle object form { type: "function", function: { name: string } }
+		if (typeof toolChoice === "object" && "function" in toolChoice) {
+			return {
+				type: "tool",
+				name: toolChoice.function.name,
+				disable_parallel_tool_use: disableParallelToolUse,
+			}
+		}
+
+		return { type: "auto", disable_parallel_tool_use: disableParallelToolUse }
+	}
+
 	async completePrompt(prompt: string) {
-		let { id: modelId, temperature } = this.getModel()
+		let { id: model, temperature } = this.getModel()
 
 		const message = await this.client.messages.create({
-			model: modelId,
+			model,
 			max_tokens: ANTHROPIC_DEFAULT_MAX_TOKENS,
 			thinking: undefined,
 			temperature,
@@ -238,16 +412,11 @@ export class AnthropicHandler extends BaseProvider implements SingleCompletionHa
 	override async countTokens(content: Array<Anthropic.Messages.ContentBlockParam>): Promise<number> {
 		try {
 			// Use the current model
-			const actualModelId = this.getModel().id
+			const { id: model } = this.getModel()
 
 			const response = await this.client.messages.countTokens({
-				model: actualModelId,
-				messages: [
-					{
-						role: "user",
-						content: content,
-					},
-				],
+				model,
+				messages: [{ role: "user", content: content }],
 			})
 
 			return response.input_tokens
